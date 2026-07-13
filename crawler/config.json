@@ -1,0 +1,36 @@
+{
+  "_설명": "크롤링 대상 지역과 수집 기준. 여기 값만 바꿔서 다시 실행하면 됩니다.",
+
+  "regions": [
+    "서울 마포구 연남동",
+    "서울 성동구 성수동"
+  ],
+
+  "search_keyword_suffix": "맛집",
+  "ranking_key": "favorite",
+  "max_candidates_per_region": 30,
+
+  "collect_filter": {
+    "_설명": "카카오 단계에서 이 기준을 못 넘으면 네이버 크롤링을 생략합니다 (시간 절약). 통과분은 전부 업로드되고, 최종 노출 기준은 웹사이트 슬라이더로 조정합니다.",
+    "min_kakao_rating": 3.5,
+    "min_kakao_reviews": 30,
+    "min_taste_pct": 80,
+    "min_revisit_pct": 20,
+    "apply_revisit_filter_on_upload": false
+  },
+
+  "kakao_review_sample": 50,
+  "naver_recent_reviews": 30,
+
+  "taste_keywords": [
+    "맛있", "존맛", "맛집", "꿀맛", "미쳤", "인생",
+    "고소", "담백", "감칠", "풍미", "깊은맛", "진한",
+    "쫄깃", "바삭", "촉촉", "부드럽", "육즙", "간이 딱",
+    "재료가 신선", "신선하", "불맛", "감동"
+  ],
+
+  "supabase": {
+    "url": "여기에_SUPABASE_URL",
+    "service_key": "여기에_SERVICE_ROLE_KEY"
+  }
+}

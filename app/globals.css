@@ -1,0 +1,118 @@
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css");
+
+:root {
+  --paper: #f2f4f6;      /* 토스 연회색 배경 */
+  --card: #ffffff;
+  --ink: #191f28;
+  --sub: #8b95a1;
+  --body: #4e5968;
+  --line: #e5e8eb;
+  --brass: #1b64da;      /* 평점 강조 (딥블루) */
+  --stamp: #3182f6;      /* 토스블루 포인트 */
+  --stamp-soft: #e8f3ff;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Pretendard Variable", Pretendard, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.2px;
+}
+
+a { color: inherit; }
+button { font-family: inherit; cursor: pointer; }
+input, select { font-family: inherit; }
+
+.serif { font-family: inherit; font-weight: 700 !important; letter-spacing: -0.4px; }
+
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
+
+/* ── 통과/미달 배지 (알약) ── */
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--brass);
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+  user-select: none;
+  height: fit-content;
+}
+.stamp.small { padding: 6px 12px; font-size: 12px; }
+.stamp.fail { background: #f2f4f6; color: var(--sub); }
+
+/* 헤더 로고 */
+.logo-mark {
+  width: 40px; height: 40px; border-radius: 13px;
+  background: var(--stamp); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 17px; flex-shrink: 0;
+}
+
+/* ── 카드 ── */
+.card {
+  background: var(--card);
+  border: none;
+  border-radius: 20px;
+  padding: 22px 24px;
+  box-shadow: 0 1px 2px rgba(25, 31, 40, 0.03);
+}
+
+.grid-fields {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px 18px;
+}
+@media (max-width: 860px) {
+  .grid-fields { grid-template-columns: repeat(2, 1fr); }
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 264px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  .filter-panel { position: static !important; }
+}
+
+input[type="range"] { accent-color: var(--stamp); width: 100%; }
+
+.field-label {
+  font-size: 11.5px;
+  color: var(--sub);
+  margin-bottom: 3px;
+}
+.field-value { font-size: 14px; font-weight: 500; line-height: 1.5; white-space: pre-line; color: var(--ink); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .card { transition: transform 0.12s ease, box-shadow 0.12s ease; }
+  .card:hover { box-shadow: 0 4px 14px rgba(25, 31, 40, 0.07); }
+}
+
+:focus-visible { outline: 2px solid var(--stamp); outline-offset: 2px; }
+
+/* ── 지도 마커 (토스블루 핀) ── */
+.map-stamp {
+  width: 26px;
+  height: 26px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--stamp);
+  color: transparent;
+  font-size: 0;
+  box-shadow: 0 2px 6px rgba(25, 31, 40, 0.25);
+  cursor: pointer;
+}
+.map-stamp:hover { transform: scale(1.15); }
+.leaflet-popup-content-wrapper { border-radius: 14px; }
+.leaflet-popup-content { margin: 12px 14px; }
