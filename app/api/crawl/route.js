@@ -34,10 +34,30 @@ const NAVER_HEADERS = { "User-Agent": UA, Referer: "https://map.naver.com/", Acc
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function clean(v) {
+  return (v || "").trim().replace(/^["']|["']$/g, "").replace(/\/+$/, "");
+}
+function envInfo() {
+  const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const key = clean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  const valid = /^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/.test(url);
+  return { url, key, valid };
+}
 function db() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const { url, key } = envInfo();
   return url && key ? createClient(url, key) : null;
+}
+
+// Supabase 에러를 한국어 해결책으로 번역
+function explain(error) {
+  const msg = String(error?.message || error || "");
+  if (msg.includes("Invalid path") || msg.includes("Invalid URL"))
+    return "Supabase 주소가 잘못됐어요. Vercel 환경변수 NEXT_PUBLIC_SUPABASE_URL 에 Supabase → Settings → API 의 Project URL(https://xxxx.supabase.co 형태)을 넣고 Redeploy 하세요.";
+  if (msg.includes("crawl_jobs") || error?.code === "PGRST205" || error?.code === "42P01")
+    return "crawl_jobs 테이블이 없어요. Supabase SQL Editor 에서 supabase/update-v6-public-crawl.sql 을 실행하세요.";
+  if (msg.includes("JWT") || msg.includes("apikey") || error?.code === "401")
+    return "Supabase 키가 잘못됐어요. NEXT_PUBLIC_SUPABASE_ANON_KEY 에 anon public 키를 넣고 Redeploy 하세요.";
+  return msg;
 }
 
 export async function POST(req) {
@@ -74,8 +94,12 @@ export async function POST(req) {
 async function startJob(region, isAdmin) {
   region = (region || "").trim();
   if (region.length < 2) return Response.json({ error: "지역을 입력하세요." }, { status: 400 });
+  const env = envInfo();
+  if (!env.url || !env.key)
+    return Response.json({ error: "Vercel 에 NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY 환경변수를 넣고 Redeploy 하세요." }, { status: 500 });
+  if (!env.valid)
+    return Response.json({ error: `Supabase 주소 형식이 잘못됐어요 (현재: ${env.url}). Settings → API 의 Project URL(https://xxxx.supabase.co)로 바꾸고 Redeploy 하세요.` }, { status: 500 });
   const sb = db();
-  if (!sb) return Response.json({ error: "Supabase 환경변수가 없습니다." }, { status: 500 });
 
   if (!isAdmin) {
     const since72h = new Date(Date.now() - COOLDOWN_HOURS * 3600 * 1000).toISOString();
@@ -105,7 +129,7 @@ async function startJob(region, isAdmin) {
     .insert({ region, status: "running", candidates })
     .select("id")
     .single();
-  if (error) return Response.json({ error: `작업 생성 실패: ${error.message}` }, { status: 500 });
+  if (error) return Response.json({ error: `작업 생성 실패 — ${explain(error)}` }, { status: 500 });
 
   return Response.json({ jobId: job.id, candidates });
 }

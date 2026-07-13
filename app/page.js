@@ -21,6 +21,7 @@ export default function Home() {
   const [theme, setTheme] = useState("전체");
   const [passOnly, setPassOnly] = useState(true);
   const [f, setF] = useState(DEFAULT_FILTERS);
+  const [dbError, setDbError] = useState("");
   const [sort, setSort] = useState("rating");
   const [search, setSearch] = useState("");
   const [filterOpen, setFilterOpen] = useState(true);
@@ -41,6 +42,13 @@ export default function Home() {
       supabase.from("restaurants").select("*").order("kakao_rating", { ascending: false }),
       supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
     ]);
+    if (r.error) {
+      setDbError(r.error.message);
+      setRows(SAMPLE_RESTAURANTS);
+      setLoading(false);
+      return;
+    }
+    setDbError("");
     setRows(r.data?.length ? r.data : SAMPLE_RESTAURANTS);
     if (s.data) {
       setF({
@@ -140,6 +148,20 @@ export default function Home() {
             }}
           >
             지금은 샘플 데이터 모드입니다. Vercel에 Supabase 환경변수를 넣으면 실제 크롤링 데이터가 표시됩니다.
+          </p>
+        )}
+        {dbError && (
+          <p
+            style={{
+              fontSize: 12,
+              color: "#a3532b",
+              background: "#fdf1e8",
+              padding: "8px 12px",
+              borderRadius: 12,
+              marginBottom: 20,
+            }}
+          >
+            Supabase 연결 오류: {dbError} — Vercel 환경변수의 URL/키를 확인하고 Redeploy 하세요.
           </p>
         )}
 
