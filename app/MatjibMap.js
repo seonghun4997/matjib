@@ -14,6 +14,7 @@ export default function MatjibMap({ places }) {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
+  const markersRef = useRef(new Map());
 
   // Leaflet 로드 + 지도 1회 생성
   useEffect(() => {
@@ -64,10 +65,24 @@ export default function MatjibMap({ places }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [places]);
 
+  // 카드의 "지도에서 보기" → 해당 마커로 이동 + 팝업 열기
+  useEffect(() => {
+    function focusPlace(e) {
+      const marker = markersRef.current.get(String(e.detail));
+      if (marker && mapRef.current) {
+        mapRef.current.flyTo(marker.getLatLng(), 16, { duration: 0.6 });
+        setTimeout(() => marker.openPopup(), 650);
+      }
+    }
+    window.addEventListener("matjib:focus", focusPlace);
+    return () => window.removeEventListener("matjib:focus", focusPlace);
+  }, []);
+
   function drawMarkers(L) {
     const layer = layerRef.current;
     if (!layer) return;
     layer.clearLayers();
+    markersRef.current.clear();
 
     const pts = places.filter((p) => p.lat && p.lng);
     pts.forEach((p) => {
@@ -80,6 +95,7 @@ export default function MatjibMap({ places }) {
       const kakaoHref =
         p.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(p.name)}`;
       const marker = L.marker([Number(p.lat), Number(p.lng)], { icon }).addTo(layer);
+      markersRef.current.set(String(p.id), marker);
       marker.bindPopup(
         `<div style="font-family:Pretendard Variable,sans-serif;min-width:190px;letter-spacing:-0.2px">
            <div style="font-size:11px;color:#8b95a1">${esc(p.category || "")}</div>

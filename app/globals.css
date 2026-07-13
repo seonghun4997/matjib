@@ -116,3 +116,44 @@ input[type="range"] { accent-color: var(--stamp); width: 100%; }
 .map-stamp:hover { transform: scale(1.15); }
 .leaflet-popup-content-wrapper { border-radius: 14px; }
 .leaflet-popup-content { margin: 12px 14px; }
+
+/* ── 버튼 ── */
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 16px; background: var(--stamp); color: #fff;
+  border: 0; border-radius: 12px; font-size: 13px; font-weight: 600;
+  text-decoration: none;
+}
+.btn-primary:active { transform: scale(0.98); }
+.btn-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 14px; background: var(--paper); color: var(--body);
+  border: 0; border-radius: 12px; font-size: 13px; font-weight: 600;
+  text-decoration: none;
+}
+
+/* ── 로딩 스켈레톤 ── */
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+.skel { background: #e9edf1; border-radius: 12px; animation: pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+/* ── 모바일 필터 접기 ── */
+.filter-toggle { display: none; }
+@media (max-width: 860px) {
+  .filter-toggle {
+    display: flex; width: 100%; align-items: center; justify-content: space-between;
+    background: none; border: 0; padding: 0; font-size: 14px; font-weight: 700; color: var(--ink);
+  }
+  .filter-body.closed { display: none; }
+}
+
+/* ── 검색/정렬 컨트롤 ── */
+.list-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.list-controls input, .list-controls select {
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px;
+  font-size: 13px; background: #fff;
+}
+@media (max-width: 860px) {
+  .filter-title { display: none; }
+  .filter-body { margin-top: 14px; }
+}

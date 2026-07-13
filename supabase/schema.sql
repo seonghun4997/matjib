@@ -37,6 +37,20 @@ create table if not exists settings (
 
 insert into settings (id) values (1) on conflict (id) do nothing;
 
+-- 방문자 크롤링 작업 기록 (쿨다운/동시실행/일일상한 판정용)
+create table if not exists crawl_jobs (
+  id uuid primary key default gen_random_uuid(),
+  region text not null,
+  status text not null default 'running',   -- running | done
+  candidates jsonb,
+  created_at timestamptz default now(),
+  finished_at timestamptz
+);
+alter table crawl_jobs enable row level security;
+create policy "public read jobs" on crawl_jobs for select using (true);
+create policy "public insert jobs" on crawl_jobs for insert with check (true);
+create policy "public update jobs" on crawl_jobs for update using (true);
+
 -- RLS: 누구나 읽기, 쓰기도 공개 (간단 운영용 — 트래픽 커지면 service_role 전용으로 좁히세요)
 alter table restaurants enable row level security;
 alter table settings enable row level security;

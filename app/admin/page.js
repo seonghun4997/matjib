@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase, hasSupabase } from "../../lib/supabase";
-import { DEFAULT_FILTERS, SITE_NAME } from "../../lib/constants";
+import { DEFAULT_FILTERS, SITE_NAME, TASTE_KEYWORDS } from "../../lib/constants";
 
 // 간단 잠금용 비밀번호 — Vercel 환경변수 NEXT_PUBLIC_ADMIN_PASS 로 변경하세요
 const PASS = process.env.NEXT_PUBLIC_ADMIN_PASS || "matjib";
@@ -14,13 +14,14 @@ export default function Admin() {
   const [f, setF] = useState(DEFAULT_FILTERS);
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState("");
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     if (!ok || !hasSupabase) return;
     (async () => {
       const [s, r] = await Promise.all([
         supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
-        supabase.from("restaurants").select("id,name,region,crawled_at").order("crawled_at", { ascending: false }),
+        supabase.from("restaurants").select("id,name,region,theme,crawled_at").order("crawled_at", { ascending: false }),
       ]);
       if (s.data)
         setF({
@@ -32,7 +33,7 @@ export default function Admin() {
         });
       setRows(r.data || []);
     })();
-  }, [ok]);
+  }, [ok, refresh]);
 
   async function saveDefaults() {
     if (!hasSupabase) return setMsg("Supabase 연결 후 사용 가능합니다.");
@@ -41,7 +42,7 @@ export default function Admin() {
   }
 
   async function remove(id) {
-    if (!confirm("이 가게를 장부에서 삭제할까요?")) return;
+    if (!confirm("이 가게를 목록에서 삭제할까요?")) return;
     await supabase.from("restaurants").delete().eq("id", id);
     setRows(rows.filter((r) => r.id !== id));
   }
@@ -89,13 +90,15 @@ export default function Admin() {
   );
 
   return (
-    <div className="wrap" style={{ padding: "40px 20px 80px", maxWidth: 720 }}>
+    <div className="wrap" style={{ padding: "40px 20px 80px", maxWidth: 760 }}>
       <Link href="/" style={{ fontSize: 12.5, color: "var(--sub)", textDecoration: "none" }}>
         ← 홈으로
       </Link>
       <h1 className="serif" style={{ fontSize: 22, fontWeight: 900, margin: "18px 0 24px" }}>
         관리자
       </h1>
+
+      <CrawlSection pass={pw} onDone={() => setRefresh((x) => x + 1)} />
 
       <section className="card" style={{ marginBottom: 24 }}>
         <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 14 }}>
@@ -120,7 +123,7 @@ export default function Admin() {
           수집된 가게 ({rows.length})
         </h2>
         <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
-          새 데이터는 크롤러(crawler 폴더)를 실행하면 자동으로 추가됩니다.
+          위 크롤링 섹션에서 지역을 추가하면 여기에 쌓입니다.
         </p>
         {!hasSupabase && <p style={{ fontSize: 13, color: "var(--sub)" }}>Supabase 연결 후 표시됩니다.</p>}
         {rows.map((r) => (
@@ -129,7 +132,11 @@ export default function Admin() {
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}
           >
             <span>
-              {r.name} <span style={{ color: "var(--sub)", fontSize: 12 }}>· {r.region}</span>
+              {r.name}{" "}
+              <span style={{ color: "var(--sub)", fontSize: 12 }}>
+                · {r.region}
+                {r.theme ? ` · ${r.theme}` : ""}
+              </span>
             </span>
             <button onClick={() => remove(r.id)} style={{ background: "none", border: 0, color: "var(--stamp)", fontSize: 12.5 }}>
               삭제
@@ -138,5 +145,204 @@ export default function Admin() {
         ))}
       </section>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 웹 크롤링 섹션 — 파이썬 없이 사이트 안에서 수집
+// ─────────────────────────────────────────────
+function CrawlSection({ pass, onDone }) {
+  const [region, setRegion] = useState("");
+  const [limit, setLimit] = useState(20);
+  const [minRating, setMinRating] = useState(3.5);
+  const [minReviews, setMinReviews] = useState(30);
+  const [minTaste, setMinTaste] = useState(60);
+  const [recentN, setRecentN] = useState(30);
+  const [keywords, setKeywords] = useState(TASTE_KEYWORDS.join(", "));
+  const [showKw, setShowKw] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState([]);
+
+  const log = (t) => setLogs((l) => [...l, t]);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function api(payload) {
+    const r = await fetch("/api/crawl", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pass, ...payload }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `요청 실패 (${r.status})`);
+    return j;
+  }
+
+  async function run() {
+    if (!region.trim()) return alert("지역을 입력하세요. 예: 서울 마포구 연남동");
+    if (!hasSupabase) return alert("Supabase 연결 후 사용 가능합니다.");
+    setRunning(true);
+    setLogs([]);
+    const kw = keywords.split(",").map((s) => s.trim()).filter(Boolean);
+    const finals = [];
+
+    try {
+      log(`[카카오] '${region} 맛집' 검색 중…`);
+      const { candidates } = await api({ mode: "kakao_search", query: `${region} 맛집`, limit: Number(limit) });
+      log(`후보 ${candidates.length}곳 발견 (즐겨찾기순 정렬)`);
+      candidates.sort((a, b) => b.favorite - a.favorite);
+
+      let i = 0;
+      for (const c of candidates) {
+        i++;
+        try {
+          const d = await api({ mode: "kakao_place", id: c.id, sample: 50 });
+          const texts = d.texts || [];
+          const hit = texts.filter((t) => kw.some((k) => t.includes(k))).length;
+          const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
+          const pass1 = d.rating >= minRating && d.reviews >= minReviews && taste >= minTaste;
+          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% ${pass1 ? "→ 통과" : "→ 제외"}`);
+          if (!pass1) {
+            await sleep(800);
+            continue;
+          }
+
+          await sleep(800);
+          const n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN) });
+          if (!n.found) {
+            log(`   네이버에서 못 찾음 — 건너뜀`);
+            await sleep(800);
+            continue;
+          }
+          log(`   네이버: ${n.category || "?"} · ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%`);
+
+          finals.push({
+            region,
+            name: c.name,
+            theme: c.theme || d.theme_fallback || "",
+            category: n.category || d.category || "",
+            kakao_rating: d.rating,
+            kakao_reviews: d.reviews,
+            taste_pct: taste,
+            naver_rating: n.naver_rating,
+            naver_reviews: n.naver_reviews,
+            revisit_pct: n.revisit_pct,
+            address: n.address || "",
+            hours: n.hours || "",
+            lat: n.lat,
+            lng: n.lng,
+            kakao_url: d.kakao_url || "",
+            naver_url: n.naver_url || "",
+          });
+        } catch (e) {
+          log(`   ! ${c.name} 실패: ${e.message}`);
+        }
+        await sleep(800);
+      }
+
+      if (finals.length) {
+        const { error } = await supabase.from("restaurants").upsert(finals, { onConflict: "region,name" });
+        if (error) throw new Error(`저장 실패: ${error.message}`);
+        log(`✓ 완료 — ${finals.length}곳 저장. 사이트에 바로 반영됐어요.`);
+        onDone && onDone();
+      } else {
+        log("통과한 가게가 없어요. 맛 비율 기준을 낮춰서 다시 시도해보세요.");
+      }
+    } catch (e) {
+      log(`! 중단: ${e.message}`);
+    }
+    setRunning(false);
+  }
+
+  const inp = (v, set, w) => ({
+    value: v,
+    onChange: (e) => set(e.target.value),
+    style: { width: w, padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13.5 },
+  });
+
+  return (
+    <section className="card" style={{ marginBottom: 24 }}>
+      <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
+        크롤링 (사이트에서 바로 수집)
+      </h2>
+      <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
+        지역을 입력하고 시작을 누르면 카카오맵 → 네이버 순서로 수집해요. 가게당 몇 초씩, 후보 20곳 기준 5분 안팎.
+        실행 중에는 이 탭을 닫지 마세요.
+      </p>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 12 }}>
+        <div>
+          <div className="field-label">지역</div>
+          <input placeholder="예: 서울 마포구 연남동" {...inp(region, setRegion, 220)} disabled={running} />
+        </div>
+        <div>
+          <div className="field-label">후보 수</div>
+          <input type="number" min={5} max={45} {...inp(limit, setLimit, 74)} disabled={running} />
+        </div>
+        <div>
+          <div className="field-label">평점 ≥</div>
+          <input type="number" step={0.1} {...inp(minRating, setMinRating, 74)} disabled={running} />
+        </div>
+        <div>
+          <div className="field-label">리뷰 ≥</div>
+          <input type="number" step={5} {...inp(minReviews, setMinReviews, 74)} disabled={running} />
+        </div>
+        <div>
+          <div className="field-label">맛 비율 % ≥</div>
+          <input type="number" step={5} {...inp(minTaste, setMinTaste, 74)} disabled={running} />
+        </div>
+        <div>
+          <div className="field-label">최근 리뷰 수</div>
+          <input type="number" step={5} {...inp(recentN, setRecentN, 74)} disabled={running} />
+        </div>
+        <button
+          onClick={run}
+          disabled={running}
+          style={{
+            padding: "9px 20px",
+            background: running ? "var(--sub)" : "var(--stamp)",
+            color: "#fff",
+            border: 0,
+            borderRadius: 12,
+            fontSize: 13.5,
+            fontWeight: 600,
+          }}
+        >
+          {running ? "수집 중…" : "크롤링 시작"}
+        </button>
+      </div>
+
+      <button
+        onClick={() => setShowKw(!showKw)}
+        style={{ background: "none", border: 0, color: "var(--sub)", fontSize: 12, padding: 0, marginBottom: 8 }}
+      >
+        {showKw ? "▾ 맛 키워드 접기" : "▸ 맛 키워드 편집 (쉼표로 구분)"}
+      </button>
+      {showKw && (
+        <textarea
+          value={keywords}
+          onChange={(e) => setKeywords(e.target.value)}
+          rows={3}
+          disabled={running}
+          style={{ width: "100%", padding: 10, border: "1px solid var(--line)", borderRadius: 12, fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }}
+        />
+      )}
+
+      {logs.length > 0 && (
+        <div
+          style={{
+            background: "var(--paper)",
+            borderRadius: 12,
+            padding: "12px 14px",
+            fontSize: 12,
+            lineHeight: 1.8,
+            maxHeight: 260,
+            overflowY: "auto",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {logs.join("\n")}
+        </div>
+      )}
+    </section>
   );
 }
