@@ -13,6 +13,8 @@ create table if not exists restaurants (
   kakao_rating numeric,              -- 카카오 평점
   kakao_reviews integer,             -- 카카오 리뷰 수
   taste_pct numeric,                 -- 카카오 '맛' 태그 비율 % (후기 대비)
+  mood_pct numeric,                  -- 카카오 '분위기' 태그 비율 % (음식/분위기 맛집 분류용)
+  highlight text,                    -- 한 줄 설명 (수집 시 자동 생성)
   naver_rating numeric,              -- 네이버 플레이스 평점
   naver_reviews integer,             -- 네이버 플레이스 리뷰 수
   revisit_pct numeric,               -- 최근 리뷰 중 재방문 비율 % (20% = 5:1)

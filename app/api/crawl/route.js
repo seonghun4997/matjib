@@ -198,7 +198,9 @@ async function naverDebug(query, lat, lng) {
 // ── 카카오: 지역 검색 → 후보 목록 ──
 async function kakaoSearch(query, limit) {
   const out = [];
-  for (let page = 1; page <= 3 && out.length < limit; page++) {
+  const seen = new Set();
+  const maxPages = Math.min(12, Math.ceil(limit / 10) + 1);
+  for (let page = 1; page <= maxPages && out.length < limit; page++) {
     const url = `${ENDPOINTS.kakaoSearch}?q=${encodeURIComponent(query)}&msFlag=A&sort=0&page=${page}`;
     const r = await fetch(url, { headers: KAKAO_HEADERS });
     if (!r.ok) throw new Error(`카카오 검색 실패 (${r.status}) — 서버 IP가 차단됐을 수 있어요.`);
@@ -212,8 +214,11 @@ async function kakaoSearch(query, limit) {
         continue;
       const full = p.category || p.cate_name || "";
       const parts = full.split(">").map((s) => s.trim()).filter(Boolean);
+      const pid = String(p.confirmid || p.cid || p.docid || p.id || "");
+      if (!pid || seen.has(pid)) continue;
+      seen.add(pid);
       out.push({
-        id: String(p.confirmid || p.cid || p.docid || p.id || ""),
+        id: pid,
         name: (p.name || "").trim(),
         // 즐겨찾기 수치가 신형 응답에 없어 검색의 리뷰 수를 랭킹 대체값으로 사용
         favorite: Number(p.favorite_cnt || p.favorCnt || p.reviewCount || 0),
@@ -294,8 +299,8 @@ function kakaoHours(data) {
   }
 }
 
-// 카카오 후기 강점 태그에서 '맛' 선택 인원 ÷ 후기 수 (%)
-function tasteFromStrength(kr) {
+// 카카오 후기 강점 태그에서 특정 태그(맛/분위기 등) 선택 인원 ÷ 후기 수 (%)
+function strengthPct(kr, label) {
   try {
     const ks = kr?.score_set;
     const total = Number(ks?.review_count || 0);
@@ -305,7 +310,7 @@ function tasteFromStrength(kr) {
     for (const c of ks?.strength_counts || []) {
       if (!c || typeof c !== "object") continue;
       const nm = c.name || nameById[String(c.id)] || "";
-      if (nm === "맛" || nm.startsWith("맛")) {
+      if (nm === label || nm.startsWith(label)) {
         const cnt = Number(c.count ?? c.cnt ?? c.uv ?? c.value ?? 0);
         return Math.round((cnt / total) * 1000) / 10;
       }
@@ -313,6 +318,22 @@ function tasteFromStrength(kr) {
     return null;
   } catch {
     return null;
+  }
+}
+
+// 대표 메뉴 이름 (한 줄 설명용)
+function topMenus(data) {
+  try {
+    const items = data?.menu?.menus?.items || [];
+    const names = [];
+    for (const it of items) {
+      const nm = it?.name || it?.menu_name || it?.title || "";
+      if (nm) names.push(String(nm).slice(0, 24));
+      if (names.length >= 3) break;
+    }
+    return names;
+  } catch {
+    return [];
   }
 }
 
@@ -344,7 +365,9 @@ async function kakaoPlace(id, sample) {
           category: cat.name4 || cat.name3 || cat.name || "",
           theme_fallback: cat.name2 || "",
           texts: texts.slice(0, sample),
-          taste_official: tasteFromStrength(data.kakaomap_review),
+          taste_official: strengthPct(data.kakaomap_review, "맛"),
+          mood_official: strengthPct(data.kakaomap_review, "분위기"),
+          menus: topMenus(data),
           address_hint: data.summary?.address?.road || data.summary?.address?.disp || "",
           hours_hint: kakaoHours(data),
           kakao_url: `https://place.map.kakao.com/${id}`,

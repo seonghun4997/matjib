@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, hasSupabase } from "../../lib/supabase";
-import { DEFAULT_FILTERS, SITE_NAME, TASTE_KEYWORDS } from "../../lib/constants";
+import { DEFAULT_FILTERS, SITE_NAME, TASTE_KEYWORDS, FOOD_HINTS, MOOD_HINTS } from "../../lib/constants";
 
 // 간단 잠금용 비밀번호 — Vercel 환경변수 NEXT_PUBLIC_ADMIN_PASS 로 변경하세요
 const PASS = process.env.NEXT_PUBLIC_ADMIN_PASS || "matjib";
@@ -148,6 +148,28 @@ export default function Admin() {
   );
 }
 
+// 리뷰 텍스트에서 사전 키워드 상위 2개 추출
+function topHits(texts, dict) {
+  const cnt = {};
+  for (const t of texts) for (const k of dict) if (t.includes(k)) cnt[k] = (cnt[k] || 0) + 1;
+  return Object.entries(cnt).sort((x, y) => y[1] - x[1]).slice(0, 2).map((e) => e[0]);
+}
+
+// 음식/분위기 유형에 따라 한 줄 설명 생성
+function makeHighlight(d, texts, taste) {
+  const isFood = (d.taste_official ?? taste ?? 0) >= (d.mood_official ?? 0);
+  if (isFood) {
+    const kws = topHits(texts, FOOD_HINTS);
+    const menu = (d.menus || [])[0];
+    const parts = [];
+    if (menu) parts.push(`대표메뉴 ${menu}`);
+    if (kws.length) parts.push(`후기에 ${kws.join("·")} 언급이 많아요`);
+    return parts.join(" — ");
+  }
+  const kws = topHits(texts, MOOD_HINTS);
+  return kws.length ? `${kws.join("·")} 좋다는 후기가 많아요` : "분위기 좋다는 평가가 많은 곳";
+}
+
 // ─────────────────────────────────────────────
 // 웹 크롤링 섹션 — 파이썬 없이 사이트 안에서 수집
 // ─────────────────────────────────────────────
@@ -160,8 +182,15 @@ function CrawlSection({ pass, onDone }) {
   const [recentN, setRecentN] = useState(30);
   const [keywords, setKeywords] = useState(TASTE_KEYWORDS.join(", "));
   const [showKw, setShowKw] = useState(false);
+  const [skipExisting, setSkipExisting] = useState(true);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [prog, setProg] = useState(null);
+  const logRef = useRef(null);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs]);
 
   const log = (t) => setLogs((l) => [...l, t]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -182,9 +211,18 @@ function CrawlSection({ pass, onDone }) {
     if (!hasSupabase) return alert("Supabase 연결 후 사용 가능합니다.");
     setRunning(true);
     setLogs([]);
+    setProg(null);
     const kw = keywords.split(",").map((s) => s.trim()).filter(Boolean);
-    const finals = [];
+    let savedCount = 0;
     let naverBlocked = false;
+
+    // 이미 수집된 가게 목록 (중복 수집 방지)
+    let existing = new Set();
+    if (skipExisting) {
+      const { data } = await supabase.from("restaurants").select("name").eq("region", region.trim());
+      existing = new Set((data || []).map((x) => x.name));
+      if (existing.size) log(`이 동네에 이미 ${existing.size}곳이 있어요 — 새 가게만 수집합니다.`);
+    }
 
     try {
       log(`[카카오] '${region} 맛집' 검색 중…`);
@@ -196,6 +234,11 @@ function CrawlSection({ pass, onDone }) {
       let consecFails = 0;
       for (const c of candidates) {
         i++;
+        setProg({ i, total: candidates.length, saved: savedCount });
+        if (skipExisting && existing.has(c.name)) {
+          log(`(${i}/${candidates.length}) ${c.name} — 이미 수집됨, 건너뜀`);
+          continue;
+        }
         if (consecFails >= 3) {
           log("카카오 상세 조회가 연속 실패해서 중단했어요. 아래 [진단 실행]을 눌러 결과를 공유해주세요.");
           break;
@@ -224,7 +267,7 @@ function CrawlSection({ pass, onDone }) {
           log(n.found ? `   네이버: ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%` : `   네이버 ${n.captcha ? "차단(캡차)" : "미확인"} → 카카오 정보로 저장`);
 
           consecFails = 0;
-          finals.push({
+          const row = {
             region,
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
@@ -232,6 +275,8 @@ function CrawlSection({ pass, onDone }) {
             kakao_rating: d.rating,
             kakao_reviews: d.reviews,
             taste_pct: taste,
+            mood_pct: d.mood_official ?? null,
+            highlight: makeHighlight(d, texts, taste) || null,
             naver_rating: n.found ? n.naver_rating : null,
             naver_reviews: n.found ? n.naver_reviews : null,
             revisit_pct: n.found ? n.revisit_pct : null,
@@ -241,7 +286,15 @@ function CrawlSection({ pass, onDone }) {
             lng: (n.found ? n.lng : null) ?? c.lng ?? null,
             kakao_url: d.kakao_url || "",
             naver_url: n.found ? n.naver_url || "" : "",
-          });
+          };
+          const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
+          if (error) {
+            log(`   저장 실패: ${error.message}`);
+          } else {
+            savedCount++;
+            setProg({ i, total: candidates.length, saved: savedCount });
+            if (savedCount % 5 === 0) onDone && onDone();
+          }
         } catch (e) {
           consecFails++;
           log(`   ! ${c.name} 실패: ${e.message}`);
@@ -283,6 +336,7 @@ function CrawlSection({ pass, onDone }) {
       log(`네이버 진단 실패: ${e.message}`);
     }
     setRunning(false);
+    setProg(null);
   }
 
   const inp = (v, set, w) => ({
@@ -297,8 +351,7 @@ function CrawlSection({ pass, onDone }) {
         크롤링 (사이트에서 바로 수집)
       </h2>
       <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
-        지역을 입력하고 시작을 누르면 카카오맵 → 네이버 순서로 수집해요. 가게당 몇 초씩, 후보 20곳 기준 5분 안팎.
-        실행 중에는 이 탭을 닫지 마세요.
+        지역 입력 후 시작 — 가게마다 즉시 저장돼서 중간에 멈춰도 그때까지는 남아요. 한 동을 전부 훑으려면 후보 수를 100~150으로 올리고, 이어서 돌릴 땐 "이미 수집된 가게 건너뛰기"가 중복을 막아줘요.
       </p>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 12 }}>
@@ -308,7 +361,7 @@ function CrawlSection({ pass, onDone }) {
         </div>
         <div>
           <div className="field-label">후보 수</div>
-          <input type="number" min={5} max={45} {...inp(limit, setLimit, 74)} disabled={running} />
+          <input type="number" min={5} max={150} {...inp(limit, setLimit, 74)} disabled={running} />
         </div>
         <div>
           <div className="field-label">평점 ≥</div>
@@ -341,6 +394,10 @@ function CrawlSection({ pass, onDone }) {
         >
           {running ? "수집 중…" : "크롤링 시작"}
         </button>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, paddingBottom: 9 }}>
+          <input type="checkbox" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} disabled={running} style={{ accentColor: "var(--stamp)" }} />
+          이미 수집된 가게 건너뛰기
+        </label>
         <button
           onClick={diagnose}
           disabled={running}
@@ -366,8 +423,20 @@ function CrawlSection({ pass, onDone }) {
         />
       )}
 
+      {prog && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--sub)", marginBottom: 4 }}>
+            <span>검수 {prog.i}/{prog.total}곳</span>
+            <span style={{ color: "var(--stamp)", fontWeight: 600 }}>저장 {prog.saved}곳</span>
+          </div>
+          <div style={{ height: 5, background: "var(--line)", borderRadius: 99 }}>
+            <div style={{ height: 5, width: `${Math.round((prog.i / prog.total) * 100)}%`, background: "var(--stamp)", borderRadius: 99, transition: "width 0.3s" }} />
+          </div>
+        </div>
+      )}
       {logs.length > 0 && (
         <div
+          ref={logRef}
           style={{
             background: "var(--paper)",
             borderRadius: 12,

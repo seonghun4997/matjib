@@ -6,19 +6,20 @@ import { supabase, hasSupabase } from "../lib/supabase";
 import MatjibMap from "./MatjibMap";
 import {
   SITE_NAME,
-  SITE_TAGLINE,
   DEFAULT_FILTERS,
   SAMPLE_RESTAURANTS,
-  tastePctToRatio,
   revisitPctToRatio,
-  TASTE_KEYWORDS,
 } from "../lib/constants";
+
+// 음식맛집 / 분위기맛집 분류: 카카오 '맛' 태그 vs '분위기' 태그 비율 비교
+const typeOf = (r) => (Number(r.taste_pct ?? 0) >= Number(r.mood_pct ?? 0) ? "food" : "mood");
 
 export default function Home() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [region, setRegion] = useState("전체");
   const [theme, setTheme] = useState("전체");
+  const [type, setType] = useState("전체"); // 전체 | food | mood
   const [passOnly, setPassOnly] = useState(true);
   const [f, setF] = useState(DEFAULT_FILTERS);
   const [dbError, setDbError] = useState("");
@@ -77,31 +78,45 @@ export default function Home() {
     return ["전체", ...Array.from(new Set(inRegion.map((r) => r.theme).filter(Boolean))).sort()];
   }, [rows, region]);
 
-  const passes = (r) =>
+  // ── 2단계 검증 ──
+  // 카카오 검증: 평점·리뷰수·맛 태그 비율 통과
+  const kakaoPass = (r) =>
     Number(r.kakao_rating) >= f.min_kakao_rating &&
     Number(r.kakao_reviews) >= f.min_kakao_reviews &&
-    Number(r.naver_reviews || 0) >= f.min_naver_reviews &&
-    Number(r.taste_pct) >= f.min_taste_pct &&
-    Number(r.revisit_pct) >= f.min_revisit_pct;
+    Number(r.taste_pct ?? 0) >= f.min_taste_pct;
+  // 네이버 검증: 재방문 데이터가 있고 기준까지 통과
+  const naverPass = (r) =>
+    r.revisit_pct != null &&
+    Number(r.revisit_pct) >= f.min_revisit_pct &&
+    (r.naver_reviews == null || Number(r.naver_reviews) >= f.min_naver_reviews);
+  // 노출 기준: 카카오 통과 + (네이버 항목은 미측정이면 보류, 있으면 기준 적용)
+  const passes = (r) =>
+    kakaoPass(r) &&
+    (r.naver_reviews == null || Number(r.naver_reviews) >= f.min_naver_reviews) &&
+    (r.revisit_pct == null || Number(r.revisit_pct) >= f.min_revisit_pct);
+  const tier = (r) => (passes(r) ? (naverPass(r) ? "naver" : "kakao") : "fail");
 
   const inScope = (r) =>
     (region === "전체" || r.region === region) &&
-    (theme === "전체" || r.theme === theme);
+    (theme === "전체" || r.theme === theme) &&
+    (type === "전체" || typeOf(r) === type);
 
   const SORTS = {
     rating: (a, b) => Number(b.kakao_rating) - Number(a.kakao_rating),
-    revisit: (a, b) => Number(b.revisit_pct) - Number(a.revisit_pct),
+    revisit: (a, b) => Number(b.revisit_pct ?? -1) - Number(a.revisit_pct ?? -1),
     reviews: (a, b) => Number(b.kakao_reviews) - Number(a.kakao_reviews),
   };
-  const visible = rows
-    .filter(inScope)
+
+  const scoped = rows.filter(inScope);
+  const visible = scoped
     .filter((r) => (passOnly ? passes(r) : true))
     .filter((r) => !search.trim() || r.name.includes(search.trim()) || (r.category || "").includes(search.trim()))
     .sort(SORTS[sort]);
-  const passCount = rows.filter(inScope).filter(passes).length;
+  const passCount = scoped.filter(passes).length;
+  const naverCount = scoped.filter((r) => tier(r) === "naver").length;
+  const kakaoCount = scoped.filter((r) => tier(r) === "kakao").length;
 
   const resetFilters = () => setF(DEFAULT_FILTERS);
-
   const set = (k) => (e) => setF({ ...f, [k]: Number(e.target.value) });
 
   return (
@@ -133,9 +148,11 @@ export default function Home() {
         <p style={{ fontSize: 13, color: "var(--body)", marginBottom: 20, lineHeight: 1.6 }}>
           카카오맵 평점·리뷰와 네이버 재방문 데이터를 교차 검증해요.{" "}
           <span style={{ color: "var(--sub)" }}>
-            현재 {regions.length - 1}개 동네 · 검수 통과 {loading ? "…" : passCount}곳
+            현재 {regions.length - 1}개 동네 · 카카오 검증 {loading ? "…" : kakaoCount}곳 · 네이버까지 검증{" "}
+            {loading ? "…" : naverCount}곳
           </span>
         </p>
+
         {!hasSupabase && (
           <p
             style={{
@@ -143,11 +160,11 @@ export default function Home() {
               color: "var(--stamp)",
               background: "var(--stamp-soft)",
               padding: "8px 12px",
-              borderRadius: 4,
+              borderRadius: 12,
               marginBottom: 20,
             }}
           >
-            지금은 샘플 데이터 모드입니다. Vercel에 Supabase 환경변수를 넣으면 실제 크롤링 데이터가 표시됩니다.
+            지금은 샘플 데이터 모드입니다. Vercel에 Supabase 환경변수를 넣으면 실제 데이터가 표시됩니다.
           </p>
         )}
         {dbError && (
@@ -166,145 +183,155 @@ export default function Home() {
         )}
 
         <div className="layout">
-          {/* ── 검수 기준 (필터) ── */}
-          <aside
-            className="filter-panel card"
-            style={{ position: "sticky", top: 20 }}
-            aria-label="검수 기준"
-          >
-            <button
-              className="filter-toggle"
-              onClick={() => setFilterOpen(!filterOpen)}
-              aria-expanded={filterOpen}
-            >
-              <span>검수 기준 · 통과 {passCount}곳</span>
+          {/* ── 검수 기준 ── */}
+          <aside className="filter-panel card" style={{ position: "sticky", top: 20 }} aria-label="검수 기준">
+            <button className="filter-toggle" onClick={() => setFilterOpen(!filterOpen)} aria-expanded={filterOpen}>
+              <span>검수 기준 · 검증 {passCount}곳</span>
               <span style={{ color: "var(--stamp)", fontSize: 13 }}>{filterOpen ? "접기 ▲" : "조정하기 ▼"}</span>
             </button>
 
             <div className={`filter-body ${filterOpen ? "" : "closed"}`}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-              <h2 className="serif filter-title" style={{ fontSize: 15, fontWeight: 900 }}>
-                검수 기준
-              </h2>
-              <button
-                onClick={resetFilters}
-                style={{ background: "none", border: 0, color: "var(--sub)", fontSize: 11.5, padding: 0, textDecoration: "underline" }}
-              >
-                초기화
-              </button>
-            </div>
-            <p style={{ fontSize: 11, color: "var(--sub)", marginBottom: 18 }}>
-              기준을 움직이면 바로 걸러져요.
-            </p>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                <h2 className="serif filter-title" style={{ fontSize: 15, fontWeight: 900 }}>
+                  검수 기준
+                </h2>
+                <button
+                  onClick={resetFilters}
+                  style={{ background: "none", border: 0, color: "var(--sub)", fontSize: 11.5, padding: 0, textDecoration: "underline" }}
+                >
+                  초기화
+                </button>
+              </div>
+              <p style={{ fontSize: 11, color: "var(--sub)", marginBottom: 18 }}>기준을 움직이면 바로 걸러져요.</p>
 
-            <div style={{ marginBottom: 18 }}>
-              <div className="field-label">지역</div>
-              <select
-                value={region}
-                onChange={(e) => setRegion(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  border: "1px solid var(--line)",
-                  borderRadius: 12,
-                  background: "#fff",
-                  fontSize: 13,
-                }}
-              >
-                {regions.map((r) => (
-                  <option key={r}>{r}</option>
-                ))}
-              </select>
-            </div>
+              <div style={{ marginBottom: 16 }}>
+                <div className="field-label">지역</div>
+                <select
+                  value={region}
+                  onChange={(e) => {
+                    setRegion(e.target.value);
+                    setTheme("전체");
+                  }}
+                  style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 12, background: "#fff", fontSize: 13 }}
+                >
+                  {regions.map((r) => (
+                    <option key={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
 
-            <FilterRow
-              label="카카오 평점"
-              value={`${f.min_kakao_rating.toFixed(1)}점 이상`}
-              min={0} max={5} step={0.1}
-              v={f.min_kakao_rating}
-              onChange={set("min_kakao_rating")}
-            />
-            <FilterRow
-              label="카카오 리뷰 수"
-              min={0} max={500} step={10}
-              v={f.min_kakao_reviews}
-              onChange={set("min_kakao_reviews")}
-              editable unit="개"
-            />
-            <FilterRow
-              label="네이버 리뷰 수"
-              min={0} max={2000} step={50}
-              v={f.min_naver_reviews}
-              onChange={set("min_naver_reviews")}
-              editable unit="개"
-            />
-            <FilterRow
-              label="맛 태그 비율 (후기 대비)"
-              value={`${f.min_taste_pct}% 이상`}
-              min={0} max={100} step={5}
-              v={f.min_taste_pct}
-              onChange={set("min_taste_pct")}
-            />
-            <FilterRow
-              label="재방문 비율 (최근 리뷰 기준)"
-              value={`${f.min_revisit_pct}% — ${revisitPctToRatio(f.min_revisit_pct)}`}
-              min={0} max={60} step={5}
-              v={f.min_revisit_pct}
-              onChange={set("min_revisit_pct")}
-            />
+              <div style={{ marginBottom: 16 }}>
+                <div className="field-label">맛집 유형</div>
+                <div style={{ display: "flex", gap: 6 }} role="tablist" aria-label="맛집 유형">
+                  {[
+                    ["전체", "전체"],
+                    ["food", "🍜 음식맛집"],
+                    ["mood", "✨ 분위기맛집"],
+                  ].map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setType(v)}
+                      role="tab"
+                      aria-selected={type === v}
+                      style={{
+                        flex: 1,
+                        padding: "7px 4px",
+                        borderRadius: 10,
+                        border: 0,
+                        fontSize: 11.5,
+                        fontWeight: 600,
+                        background: type === v ? "var(--stamp)" : "var(--paper)",
+                        color: type === v ? "#fff" : "var(--body)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-            <label
-              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginTop: 6, cursor: "pointer" }}
-            >
-              <input
-                type="checkbox"
-                checked={passOnly}
-                onChange={(e) => setPassOnly(e.target.checked)}
-                style={{ accentColor: "var(--stamp)" }}
+              {themes.length > 2 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div className="field-label">카카오 테마</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }} role="tablist" aria-label="카카오 테마">
+                    {themes.map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setTheme(t)}
+                        role="tab"
+                        aria-selected={theme === t}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 999,
+                          border: 0,
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          background: theme === t ? "var(--stamp)" : "var(--paper)",
+                          color: theme === t ? "#fff" : "var(--body)",
+                        }}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <FilterRow
+                label="카카오 평점"
+                value={`${f.min_kakao_rating.toFixed(1)}점 이상`}
+                min={0} max={5} step={0.1}
+                v={f.min_kakao_rating}
+                onChange={set("min_kakao_rating")}
               />
-              통과한 곳만 보기
-            </label>
+              <FilterRow
+                label="카카오 리뷰 수"
+                min={0} max={500} step={10}
+                v={f.min_kakao_reviews}
+                onChange={set("min_kakao_reviews")}
+                editable unit="개"
+              />
+              <FilterRow
+                label="네이버 리뷰 수"
+                min={0} max={2000} step={50}
+                v={f.min_naver_reviews}
+                onChange={set("min_naver_reviews")}
+                editable unit="개"
+              />
+              <FilterRow
+                label="맛 태그 비율 (후기 대비)"
+                value={`${f.min_taste_pct}% 이상`}
+                min={0} max={100} step={5}
+                v={f.min_taste_pct}
+                onChange={set("min_taste_pct")}
+              />
+              <FilterRow
+                label="재방문 비율 (최근 리뷰 기준)"
+                value={`${f.min_revisit_pct}% — ${revisitPctToRatio(f.min_revisit_pct)}`}
+                min={0} max={60} step={5}
+                v={f.min_revisit_pct}
+                onChange={set("min_revisit_pct")}
+              />
+              <p style={{ fontSize: 10.5, color: "var(--sub)", margin: "-6px 0 12px" }}>
+                재방문 미측정 가게는 &lsquo;카카오 검증&rsquo;으로 표시돼요.
+              </p>
 
-            <NewRegionCrawl
-              onDone={(newRegion) => {
-                reload();
-                setRegion(newRegion);
-              }}
-            />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={passOnly}
+                  onChange={(e) => setPassOnly(e.target.checked)}
+                  style={{ accentColor: "var(--stamp)" }}
+                />
+                검증된 곳만 보기
+              </label>
             </div>
           </aside>
 
           {/* ── 지도 + 목록 ── */}
           <section aria-label="맛집 지도와 목록">
-            <div
-              style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}
-              role="tablist"
-              aria-label="카카오 테마"
-            >
-              {themes.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTheme(t)}
-                  role="tab"
-                  aria-selected={theme === t}
-                  style={{
-                    padding: "8px 16px",
-                    borderRadius: 999,
-                    border: "none",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: theme === t ? "var(--ink)" : "var(--card)",
-                    color: theme === t ? "#fff" : "var(--body)",
-                    boxShadow: "0 1px 2px rgba(25,31,40,0.04)",
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-
             <div style={{ marginBottom: 24 }} id="map-anchor">
-              <MatjibMap places={rows.filter(inScope).filter(passes)} />
+              <MatjibMap places={scoped.filter(passes)} />
             </div>
 
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
@@ -312,7 +339,7 @@ export default function Home() {
                 {region} 맛집
               </h2>
               <span style={{ fontSize: 12.5, color: "var(--sub)" }}>
-                {loading ? "불러오는 중…" : `검수 통과 ${passCount}곳 / 후보 ${rows.filter(inScope).length}곳`}
+                {loading ? "불러오는 중…" : `검증 ${passCount}곳 / 후보 ${scoped.length}곳`}
               </span>
             </div>
 
@@ -346,9 +373,7 @@ export default function Home() {
             {!loading && visible.length === 0 && (
               <div className="card" style={{ textAlign: "center", padding: "48px 20px" }}>
                 <p style={{ color: "var(--sub)", fontSize: 14, marginBottom: 14 }}>
-                  {search.trim()
-                    ? `'${search.trim()}' 검색 결과가 없어요.`
-                    : "기준을 통과한 곳이 없어요."}
+                  {search.trim() ? `'${search.trim()}' 검색 결과가 없어요.` : "기준을 통과한 곳이 없어요."}
                 </p>
                 {search.trim() ? (
                   <button className="btn-ghost" onClick={() => setSearch("")}>검색 지우기</button>
@@ -360,7 +385,7 @@ export default function Home() {
 
             <div style={{ display: "grid", gap: 14 }}>
               {visible.map((r) => (
-                <RestaurantCard key={r.id} r={r} pass={passes(r)} />
+                <RestaurantCard key={r.id} r={r} tier={tier(r)} />
               ))}
             </div>
           </section>
@@ -407,39 +432,74 @@ function FilterRow({ label, value, min, max, step, v, onChange, editable, unit }
           <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--stamp)" }}>{value}</span>
         )}
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={Math.min(v, max)}
-        onChange={onChange}
-        aria-label={label}
-      />
+      <input type="range" min={min} max={max} step={step} value={Math.min(v, max)} onChange={onChange} aria-label={label} />
     </div>
   );
 }
 
-function RestaurantCard({ r, pass }) {
+function TypeChip({ r }) {
+  const food = typeOf(r) === "food";
+  return (
+    <span
+      style={{
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: "3px 9px",
+        borderRadius: 999,
+        background: food ? "#fdf0e6" : "#efeafd",
+        color: food ? "#b4560f" : "#6d43c9",
+      }}
+    >
+      {food ? "🍜 음식맛집" : "✨ 분위기맛집"}
+    </span>
+  );
+}
+
+function RestaurantCard({ r, tier }) {
   return (
     <article className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 11.5, color: "var(--sub)", marginBottom: 3 }}>{r.region}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+            <span style={{ fontSize: 11.5, color: "var(--sub)" }}>{r.region}</span>
+            <TypeChip r={r} />
+          </div>
           <h3 className="serif" style={{ fontSize: 19, fontWeight: 900, lineHeight: 1.3 }}>
             {r.name}
-            <span style={{ fontSize: 12.5, fontWeight: 400, color: "var(--sub)", marginLeft: 10, fontFamily: "Pretendard Variable, sans-serif" }}>
-              {r.category}
-            </span>
+            <span style={{ fontSize: 12.5, fontWeight: 400, color: "var(--sub)", marginLeft: 10 }}>{r.category}</span>
             {r.theme && (
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--brass)", background: "var(--stamp-soft)", padding: "3px 9px", borderRadius: 999, marginLeft: 8, verticalAlign: "middle" }}>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--brass)",
+                  background: "var(--stamp-soft)",
+                  padding: "3px 9px",
+                  borderRadius: 999,
+                  marginLeft: 8,
+                  verticalAlign: "middle",
+                }}
+              >
                 {r.theme}
               </span>
             )}
           </h3>
+          {r.highlight && (
+            <p style={{ fontSize: 13, color: "var(--body)", marginTop: 6 }}>{r.highlight}</p>
+          )}
         </div>
-        <span className={`stamp small ${pass ? "" : "fail"}`} title={pass ? "전 항목 통과" : "기준 미달"}>
-          {pass ? "통과" : "미달"}
+        <span
+          className={`stamp small ${tier === "fail" ? "fail" : ""}`}
+          style={tier === "naver" ? { background: "var(--stamp)", color: "#fff" } : undefined}
+          title={
+            tier === "naver"
+              ? "카카오 + 네이버 재방문까지 전 항목 통과"
+              : tier === "kakao"
+              ? "카카오 기준 통과 (네이버 재방문 미측정)"
+              : "기준 미달"
+          }
+        >
+          {tier === "naver" ? "네이버까지 검증" : tier === "kakao" ? "카카오 검증" : "미달"}
         </span>
       </div>
 
@@ -489,226 +549,6 @@ function Field({ label, value, span }) {
     <div style={span ? { gridColumn: `span ${span}` } : undefined}>
       <div className="field-label">{label}</div>
       <div className="field-value">{value}</div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────
-// 방문자용 새 동네 수집 — 안전장치(3일 쿨다운·동시 1건·일 10건)는 서버가 판단
-// ─────────────────────────────────────────────
-function NewRegionCrawl({ onDone }) {
-  const [q, setQ] = useState("");
-  const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState([]);
-  const [prog, setProg] = useState(null);
-  const logRef = useRef(null);
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
-
-  const log = (t) => setLogs((l) => [...l.slice(-40), t]);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  async function api(payload) {
-    const r = await fetch("/api/crawl", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || `요청 실패 (${r.status})`);
-    return j;
-  }
-
-  async function run() {
-    const region = q.trim();
-    if (region.length < 2) return;
-    if (!hasSupabase) {
-      alert("Supabase 연결 후 사용할 수 있어요.");
-      return;
-    }
-    setRunning(true);
-    setLogs([]);
-    setProg(null);
-    let jobId = null;
-    let savedCount = 0;
-    let naverBlocked = false;
-
-    try {
-      log(`'${region}' 수집 준비 중…`);
-      const start = await api({ mode: "start", region });
-      if (start.blocked) {
-        log(start.blocked);
-        setRunning(false);
-        return;
-      }
-      jobId = start.jobId;
-      const candidates = (start.candidates || []).sort((a, b) => b.favorite - a.favorite);
-      log(`후보 ${candidates.length}곳 — 하나씩 검수할게요 (3~5분)`);
-
-      let i = 0;
-      let consecFails = 0;
-      for (const c of candidates) {
-        i++;
-        setProg({ i, total: candidates.length, saved: savedCount });
-        if (consecFails >= 3) {
-          log("카카오 상세 조회가 연속 실패해서 중단했어요. 관리자 페이지의 [진단]을 실행해 결과를 공유해주세요.");
-          break;
-        }
-        try {
-          const d = await api({ mode: "kakao_place", jobId, id: c.id, sample: 50 });
-          if (d.rating < 3.0 || d.reviews < 10) {
-            log(`(${i}/${candidates.length}) ${c.name} — 정보 부족, 건너뜀`);
-            await sleep(800);
-            continue;
-          }
-          const texts = d.texts || [];
-          const hit = texts.filter((t) => TASTE_KEYWORDS.some((k) => t.includes(k))).length;
-          const taste =
-            d.taste_official != null ? d.taste_official : texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
-          const tasteNote = d.taste_official != null ? "" : `(추정·표본 ${texts.length})`;
-
-          let n = { found: false, captcha: naverBlocked };
-          if (!naverBlocked) {
-            await sleep(500);
-            try {
-              n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30, lat: c.lat, lng: c.lng });
-            } catch {}
-            if (n.captcha) {
-              naverBlocked = true;
-              log("네이버가 서버 접근을 막고 있어 이후 가게는 카카오 정보로만 저장해요. (나중에 보강 가능)");
-            }
-          }
-          log(
-            n.found
-              ? `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%${tasteNote} · 재방문 ${n.revisit_pct}% ✓`
-              : `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%${tasteNote} ✓ 저장`
-          );
-
-          consecFails = 0;
-          const row = {
-            region,
-            name: c.name,
-            theme: c.theme || d.theme_fallback || "",
-            category: (n.found && n.category) || d.category || c.cate_leaf || "",
-            kakao_rating: d.rating,
-            kakao_reviews: d.reviews,
-            taste_pct: taste,
-            naver_rating: n.found ? n.naver_rating : null,
-            naver_reviews: n.found ? n.naver_reviews : null,
-            revisit_pct: n.found ? n.revisit_pct : null,
-            address: (n.found && n.address) || d.address_hint || "",
-            hours: (n.found && n.hours) || d.hours_hint || "",
-            lat: (n.found ? n.lat : null) ?? c.lat ?? null,
-            lng: (n.found ? n.lng : null) ?? c.lng ?? null,
-            kakao_url: d.kakao_url || "",
-            naver_url: n.found ? n.naver_url || "" : "",
-          };
-          const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
-          if (error) {
-            log(`   저장 실패: ${error.message}`);
-          } else {
-            savedCount++;
-            setProg({ i, total: candidates.length, saved: savedCount });
-            if (savedCount === 1 || savedCount % 3 === 0) onDone && onDone(region);
-          }
-        } catch (e) {
-          consecFails++;
-          log(`(${i}/${candidates.length}) ${c.name} — 실패: ${e.message}`);
-        }
-        await sleep(800);
-      }
-
-      if (savedCount) {
-        log(`✓ 완료 — ${savedCount}곳이 저장됐어요. 왼쪽 기준으로 걸러서 보여드릴게요.`);
-        onDone && onDone(region);
-      } else {
-        log("이 동네에서는 저장된 가게가 없어요. 기준을 낮춰 다시 시도해보세요.");
-      }
-    } catch (e) {
-      log(`중단: ${e.message}`);
-    } finally {
-      if (jobId) {
-        try {
-          await api({ mode: "finish", jobId, saved: savedCount });
-        } catch {}
-      }
-    }
-    setRunning(false);
-    setProg(null);
-  }
-
-  return (
-    <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
-      <div className="field-label">찾는 동네가 없나요?</div>
-      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !running && run()}
-          placeholder="예: 서울 마포구 연남동"
-          disabled={running}
-          aria-label="새 동네 입력"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: "8px 10px",
-            border: "1px solid var(--line)",
-            borderRadius: 12,
-            fontSize: 12.5,
-          }}
-        />
-        <button
-          onClick={run}
-          disabled={running}
-          style={{
-            padding: "8px 12px",
-            background: running ? "var(--sub)" : "var(--stamp)",
-            color: "#fff",
-            border: 0,
-            borderRadius: 12,
-            fontSize: 12.5,
-            fontWeight: 600,
-            flexShrink: 0,
-          }}
-        >
-          {running ? "수집 중" : "수집"}
-        </button>
-      </div>
-      <p style={{ fontSize: 10.5, color: "var(--sub)", marginTop: 6 }}>
-        같은 동네는 3일에 한 번, 하루 10개 동네까지 수집할 수 있어요. 수집 중엔 이 탭을 열어두세요.
-      </p>
-      {prog && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--sub)", marginBottom: 4 }}>
-            <span>검수 {prog.i}/{prog.total}곳</span>
-            <span style={{ color: "var(--stamp)", fontWeight: 600 }}>저장 {prog.saved}곳</span>
-          </div>
-          <div style={{ height: 5, background: "var(--line)", borderRadius: 99 }}>
-            <div style={{ height: 5, width: `${Math.round((prog.i / prog.total) * 100)}%`, background: "var(--stamp)", borderRadius: 99, transition: "width 0.3s" }} />
-          </div>
-        </div>
-      )}
-      {logs.length > 0 && (
-        <div
-          ref={logRef}
-          style={{
-            background: "var(--paper)",
-            borderRadius: 12,
-            padding: "10px 12px",
-            fontSize: 11.5,
-            lineHeight: 1.7,
-            maxHeight: 180,
-            overflowY: "auto",
-            whiteSpace: "pre-wrap",
-            marginTop: 8,
-          }}
-          aria-live="polite"
-        >
-          {logs.join("\n")}
-        </div>
-      )}
     </div>
   );
 }
