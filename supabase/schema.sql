@@ -38,7 +38,8 @@ create table if not exists settings (
   min_naver_reviews integer default 0,
   min_taste_pct numeric default 25,
   min_mood_pct numeric default 25,
-  min_revisit_pct numeric default 20
+  min_revisit_pct numeric default 20,
+  suspect_hide_score numeric default 60
 );
 
 insert into settings (id) values (1) on conflict (id) do nothing;

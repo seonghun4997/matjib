@@ -337,11 +337,14 @@ function topMenus(data) {
   }
 }
 
-// 후기조작 의심 신호 (어드민 판단용 — 자동 제외하지 않음)
+// 후기조작 의심도 (0~100점) — 어드민 판단용, 기준점 이상은 자동 숨김
+// 기준 A: 특정 시기에 평균별점 4.9~5.0 리뷰어들이 집중 등록
+// 기준 B: 후기 대비 맛/분위기 태그 비율이 압도적으로 높음 (평균 20~40%)
 function suspicion(data, rating, reviews, tastePct, moodPct) {
+  let score = 0;
   const reasons = [];
   try {
-    // ① 사진 리뷰어들의 프로필 평균 별점이 5.0에 몰림
+    // A-1. 사진 리뷰어 프로필의 평균별점 분포
     const owners = [];
     const seen = new Set();
     for (const ph of data?.photos?.photos || []) {
@@ -354,34 +357,57 @@ function suspicion(data, rating, reviews, tastePct, moodPct) {
     }
     if (owners.length >= 5) {
       const five = owners.filter((o) => Number(o.average_score) >= 4.9).length;
-      if (five / owners.length >= 0.6) reasons.push(`리뷰어 ${owners.length}명 중 ${five}명이 평균별점 4.9+`);
+      const pct = five / owners.length;
+      if (pct >= 0.8) {
+        score += 45;
+        reasons.push(`리뷰어 ${owners.length}명 중 ${five}명(${Math.round(pct * 100)}%)이 평균별점 4.9+`);
+      } else if (pct >= 0.6) {
+        score += 30;
+        reasons.push(`리뷰어 ${owners.length}명 중 ${five}명이 평균별점 4.9+`);
+      }
       const newbies = owners.filter((o) => Number(o.review_count) <= 3 && Number(o.average_score) >= 4.9).length;
-      if (newbies >= 3) reasons.push(`신규계정(리뷰 3개↓) 만점 리뷰어 ${newbies}명`);
+      if (newbies >= 3) {
+        score += 15;
+        reasons.push(`신규계정(리뷰 3개↓) 만점 리뷰어 ${newbies}명`);
+      }
     }
-    // ② 리뷰 등록일이 특정 시기에 집중
+    // A-2. 리뷰 등록일이 특정 시기에 집중 (숫자/문자 날짜 모두 지원)
+    const toDate = (v) => {
+      if (v == null) return null;
+      if (typeof v === "number") return v > 1e12 ? v : v > 1e9 ? v * 1000 : null;
+      const s = String(v);
+      if (/^\d{13}$/.test(s)) return Number(s);
+      if (/^\d{10}$/.test(s)) return Number(s) * 1000;
+      const m = s.match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+      if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}`).getTime();
+      const t = Date.parse(s);
+      return isNaN(t) ? null : t;
+    };
     const dates = (data?.kakaomap_review?.reviews || [])
-      .map((rv) => {
-        const m = String(rv?.registered_at || "").match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
-        return m ? new Date(`${m[1]}-${m[2]}-${m[3]}`).getTime() : null;
-      })
+      .map((rv) => toDate(rv?.registered_at ?? rv?.updated_at))
       .filter(Boolean)
       .sort((a, b) => a - b);
     if (dates.length >= 5) {
       const span = 14 * 86400 * 1000;
       let best = 0;
-      for (let a = 0; a < dates.length; a++) {
-        const inWin = dates.filter((d) => d >= dates[a] && d <= dates[a] + span).length;
-        best = Math.max(best, inWin);
+      for (const s0 of dates) best = Math.max(best, dates.filter((d) => d >= s0 && d <= s0 + span).length);
+      if (best / dates.length >= 0.7) {
+        score += 25;
+        reasons.push(`최근 리뷰 ${dates.length}개 중 ${best}개가 2주 안에 집중 등록`);
       }
-      if (best / dates.length >= 0.7) reasons.push(`최근 리뷰 ${dates.length}개 중 ${best}개가 2주 안에 집중 등록`);
     }
-    // ③ 태그 비율 과다 (평균 20~40% 대비)
-    if (tastePct != null && tastePct >= 70) reasons.push(`맛 태그 비율 ${tastePct}% (평균 20~40% 대비 과다)`);
-    if (moodPct != null && moodPct >= 70) reasons.push(`분위기 태그 비율 ${moodPct}% (과다)`);
-    // ④ 고평점 편중
-    if (rating >= 4.9 && reviews >= 50) reasons.push(`리뷰 ${reviews}개인데 평점 ${rating} (만점 편중)`);
+    // B. 태그 비율 과다
+    const top = Math.max(Number(tastePct ?? 0), Number(moodPct ?? 0));
+    const tag = Number(tastePct ?? 0) >= Number(moodPct ?? 0) ? "맛" : "분위기";
+    if (top >= 75) {
+      score += 30;
+      reasons.push(`${tag} 태그 비율 ${top}% — 평균(20~40%) 대비 압도적`);
+    } else if (top >= 60) {
+      score += 15;
+      reasons.push(`${tag} 태그 비율 ${top}%로 높은 편`);
+    }
   } catch {}
-  return { score: reasons.length, reasons: reasons.join(" / ") };
+  return { score: Math.min(100, score), reasons: reasons.join(" / ") };
 }
 
 async function kakaoPlace(id, sample) {

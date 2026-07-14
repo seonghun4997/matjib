@@ -33,6 +33,7 @@ export default function Admin() {
           min_taste_pct: Number(s.data.min_taste_pct),
           min_mood_pct: Number(s.data.min_mood_pct ?? 25),
           min_revisit_pct: Number(s.data.min_revisit_pct),
+          suspect_hide_score: Number(s.data.suspect_hide_score ?? 60),
         });
       setRows(r.data || []);
     })();
@@ -119,6 +120,7 @@ export default function Admin() {
         {num("min_taste_pct", 5, "맛 태그 비율 (이상)", "% — 음식맛집 기준")}
         {num("min_mood_pct", 5, "분위기 태그 비율 (이상)", "% — 분위기맛집 기준")}
         {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 최근 20개 중 4개 = 20%. '무조건 맛집 보장' 배지 기준")}
+        {num("suspect_hide_score", 5, "조작 의심 자동 숨김 (이상)", "점 — 의심도가 이 점수 이상이면 수집 시 자동으로 고객 화면에서 숨김")}
         <button
           onClick={saveDefaults}
           style={{ padding: "9px 18px", background: "var(--stamp)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5 }}
@@ -138,7 +140,8 @@ export default function Admin() {
           ④ 수집된 가게 ({rows.length})
         </h2>
         <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 12 }}>
-          ⚠️ 조작의심 배지에 마우스를 올리면 근거가 보여요. 참고용 신호이니 직접 판단 후 [숨김]으로 고객 화면에서만 제외하세요.
+          의심도(0~100점)는 ① 특정 시기에 평균별점 4.9~5.0 리뷰어 집중 ② 맛/분위기 태그 비율 과다 — 두 기준으로 계산돼요.
+          {f.suspect_hide_score}점 이상은 수집 때 자동 숨김되고, 배지에 마우스를 올리면 근거가 보여요. 오판이면 [표시]로 되살리세요.
         </p>
         {!hasSupabase && <p style={{ fontSize: 13, color: "var(--sub)" }}>Supabase 연결 후 표시됩니다.</p>}
         {rows.map((r) => (
@@ -156,9 +159,18 @@ export default function Admin() {
               {r.suspect_score > 0 && (
                 <span
                   title={r.suspect_reasons || ""}
-                  style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fdf0e0", padding: "2px 8px", borderRadius: 999, cursor: "help" }}
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: r.suspect_score >= 60 ? "#b91c1c" : "#b45309",
+                    background: r.suspect_score >= 60 ? "#fdeaea" : "#fdf0e0",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    cursor: "help",
+                  }}
                 >
-                  ⚠️ 조작의심 {r.suspect_score}
+                  ⚠️ 의심도 {r.suspect_score}점
                 </span>
               )}
               {r.hidden && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--sub)" }}>(숨김)</span>}
@@ -280,7 +292,8 @@ function CrawlSection({ pass, f, onDone }) {
           const typeOk = collectType === "both" ? foodOk || moodOk : collectType === "food" ? foodOk : moodOk;
           const pass1 = d.rating >= f.min_kakao_rating && d.reviews >= f.min_kakao_reviews && typeOk;
           const kind = foodOk && moodOk ? "음식+분위기" : foodOk ? "음식" : "분위기";
-          const susNote = d.suspect_score > 0 ? ` ⚠️의심${d.suspect_score}` : "";
+          const autoHide = (d.suspect_score || 0) >= f.suspect_hide_score;
+          const susNote = d.suspect_score > 0 ? ` ⚠️의심 ${d.suspect_score}점${autoHide ? "→자동숨김" : ""}` : "";
           log(
             `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% · 분위기 ${mood}%${susNote} ${
               pass1 ? `→ ${kind}맛집 저장` : "→ 제외"
@@ -313,7 +326,7 @@ function CrawlSection({ pass, f, onDone }) {
             naver_url: "",
             suspect_score: d.suspect_score || 0,
             suspect_reasons: d.suspect_reasons || null,
-            hidden: false,
+            hidden: autoHide,
           };
           const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
           if (error) {

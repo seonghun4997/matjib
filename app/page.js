@@ -25,7 +25,7 @@ export default function Home() {
   const [type, setType] = useState("전체"); // 전체 | food | mood
   const [f, setF] = useState(DEFAULT_FILTERS);
   const [dbError, setDbError] = useState("");
-  const [sort, setSort] = useState("rating");
+  const [sort, setSort] = useState("reco");
   const [search, setSearch] = useState("");
   async function reload() {
     if (!hasSupabase) {
@@ -98,6 +98,8 @@ export default function Home() {
     (type === "전체" || (type === "food" ? qualifiesFood(r) : qualifiesMood(r)));
 
   const SORTS = {
+    reco: (a, b) =>
+      (naverPass(b) ? 1 : 0) - (naverPass(a) ? 1 : 0) || Number(b.kakao_rating) - Number(a.kakao_rating),
     rating: (a, b) => Number(b.kakao_rating) - Number(a.kakao_rating),
     revisit: (a, b) => Number(b.revisit_pct ?? -1) - Number(a.revisit_pct ?? -1),
     reviews: (a, b) => Number(b.kakao_reviews) - Number(a.kakao_reviews),
@@ -271,6 +273,7 @@ export default function Home() {
                 style={{ flex: 1, minWidth: 150 }}
               />
               <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="정렬">
+                <option value="reco">추천순 (보장 우선)</option>
                 <option value="rating">카카오 평점순</option>
                 <option value="revisit">재방문 비율순</option>
                 <option value="reviews">리뷰 많은 순</option>
@@ -392,18 +395,13 @@ function RestaurantCard({ r, tier, food, mood }) {
         </span>
       </div>
 
-      <div className="grid-fields">
-        <Field label="카카오 평점" value={<span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.kakao_rating).toFixed(1)}</span>} />
-        <Field label="카카오 리뷰" value={`${Number(r.kakao_reviews).toLocaleString()}개`} />
-        <Field label="맛 태그 비율" value={r.taste_pct == null ? "—" : `${r.taste_pct}%`} />
-        <Field label="재방문 비율" value={r.revisit_pct == null ? "미측정" : `${r.revisit_pct}%`} />
-        <Field label="네이버 평점" value={r.naver_rating ? <span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.naver_rating).toFixed(2)}</span> : "—"} />
-        <Field label="네이버 리뷰" value={r.naver_reviews ? `${Number(r.naver_reviews).toLocaleString()}개` : "—"} />
-        <Field label="주소" value={r.address || "—"} span={2} />
-        <Field label="영업시간 (브레이크타임 포함)" value={r.hours || "—"} span={4} />
-      </div>
+      <p style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 2 }}>
+        <span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.kakao_rating).toFixed(1)}</span>
+        {" · "}리뷰 {Number(r.kakao_reviews).toLocaleString()}개
+        {r.revisit_pct != null && ` · 재방문 ${r.revisit_pct}%`}
+      </p>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
         <a
           className="btn-primary"
           href={r.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(r.name)}`}
@@ -440,11 +438,3 @@ function RestaurantCard({ r, tier, food, mood }) {
   );
 }
 
-function Field({ label, value, span }) {
-  return (
-    <div style={span ? { gridColumn: `span ${span}` } : undefined}>
-      <div className="field-label">{label}</div>
-      <div className="field-value">{value}</div>
-    </div>
-  );
-}

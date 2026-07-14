@@ -94,6 +94,12 @@ export default function MatjibMap({ places }) {
       });
       const kakaoHref =
         p.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(p.name)}`;
+      const hlText =
+        String(p.highlight || "")
+          .replace(/후기 [\d,]+명 중 [\d,]+명이 '[^']+'[을를] 꼽았어요( · )?/g, "")
+          .trim()
+          .slice(0, 64) ||
+        `★${Number(p.kakao_rating).toFixed(1)} · 리뷰 ${Number(p.kakao_reviews).toLocaleString()}개`;
       const naverHref =
         p.naver_url ||
         `https://map.naver.com/p/search/${encodeURIComponent(`${(p.region || "").split(" ").pop()} ${p.name}`)}`;
@@ -103,8 +109,8 @@ export default function MatjibMap({ places }) {
         `<div style="font-family:Pretendard Variable,sans-serif;min-width:190px;letter-spacing:-0.2px">
            <div style="font-size:11px;color:#8b95a1">${esc(p.category || "")}</div>
            <div style="font-weight:700;font-size:15px;margin:2px 0 4px">${esc(p.name)}</div>
-           <div style="font-size:12px;color:#1b64da;font-weight:600;margin-bottom:8px">
-             카카오 ★${Number(p.kakao_rating).toFixed(1)} · 재방문 ${p.revisit_pct}%
+           <div style="font-size:12px;color:#4e5968;line-height:1.5;margin-bottom:8px">
+             ${esc(hlText)}
            </div>
            <a href="${kakaoHref}" target="_blank" rel="noreferrer"
               style="display:block;text-align:center;background:#3182f6;color:#fff;
