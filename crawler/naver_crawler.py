@@ -41,7 +41,7 @@ DELAY = 1.5
 
 def find_place(name: str, region: str) -> dict | None:
     """업체명 검색 → 첫 번째 플레이스의 ID와 좌표(위경도)."""
-    params = {"query": f"{region.split()[-1]} {name}", "type": "all"}
+    params = {"query": f"{region.split()[-1]} {name}", "type": "all", "searchCoord": "", "boundary": ""}
     r = requests.get(ENDPOINTS["search"], params=params, headers=HEADERS, timeout=10)
     if r.status_code != 200:
         return None

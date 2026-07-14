@@ -550,7 +550,6 @@ function NewRegionCrawl({ onDone }) {
         }
         try {
           const d = await api({ mode: "kakao_place", jobId, id: c.id, sample: 50 });
-          consecFails = 0;
           if (d.rating < 3.0 || d.reviews < 10) {
             log(`(${i}/${candidates.length}) ${c.name} — 정보 부족, 건너뜀`);
             await sleep(800);
@@ -561,7 +560,7 @@ function NewRegionCrawl({ onDone }) {
           const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
 
           await sleep(800);
-          const n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30 });
+          const n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30, lat: c.lat, lng: c.lng });
           if (!n.found) {
             log(`(${i}/${candidates.length}) ${c.name} — 네이버 미확인, 건너뜀`);
             await sleep(800);
@@ -569,6 +568,7 @@ function NewRegionCrawl({ onDone }) {
           }
           log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}%(표본 ${texts.length}) · 재방문 ${n.revisit_pct}% ✓`);
 
+          consecFails = 0;
           finals.push({
             region,
             name: c.name,

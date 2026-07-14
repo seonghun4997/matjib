@@ -70,6 +70,10 @@ export async function POST(req) {
     if (body.mode === "finish") return await finishJob(body.jobId, body.saved);
 
     // 가게 단위 조회 — 관리자이거나, 유효한 작업(jobId) 소속이어야 함
+    if (body.mode === "naver_debug") {
+      if (!isAdmin) return Response.json({ error: "권한이 없습니다." }, { status: 401 });
+      return Response.json(await naverDebug(body.query || "성북동 쌍다리돼지불백", body.lat, body.lng));
+    }
     if (body.mode === "kakao_debug") {
       if (!isAdmin) return Response.json({ error: "권한이 없습니다." }, { status: 401 });
       return Response.json(await kakaoDebug(body.query || "서울 성북동 맛집"));
@@ -86,7 +90,7 @@ export async function POST(req) {
     if (body.mode === "naver_place") {
       if (!isAdmin && !(await jobAllows(body.jobId, "name", body.name)))
         return Response.json({ error: "유효하지 않은 작업입니다." }, { status: 401 });
-      return Response.json(await naverPlace(body.name, body.region, body.recent || 30));
+      return Response.json(await naverPlace(body.name, body.region, body.recent || 30, body.lat, body.lng));
     }
     return Response.json({ error: "알 수 없는 mode" }, { status: 400 });
   } catch (e) {
@@ -164,6 +168,31 @@ async function jobAllows(jobId, field, value) {
   if (!job || job.status !== "running") return false;
   if (new Date(job.created_at) < new Date(Date.now() - JOB_TIMEOUT_MIN * 60 * 1000)) return false;
   return (job.candidates || []).some((c) => String(c[field]) === String(value));
+}
+
+// ── 진단: 네이버 검색 주소 3종의 응답 상태/구조 확인 (관리자용) ──
+async function naverDebug(query, lat, lng) {
+  const out = { query, attempts: [] };
+  for (const a of NAVER_SEARCH_ATTEMPTS(query, lng, lat)) {
+    try {
+      const res = await fetch(a.url, { headers: NAVER_HEADERS });
+      const body = await res.text();
+      const entry = { tag: a.tag, status: res.status, url: a.url.slice(0, 120) };
+      try {
+        const json = JSON.parse(body);
+        entry.key_tree = keyTree(json);
+        const hit = firstPlaceHit(json);
+        if (hit) entry.first_hit = Object.fromEntries(Object.entries(hit).slice(0, 15).map(([k, v]) => [k, String(v).slice(0, 50)]));
+      } catch {
+        entry.body_head = body.slice(0, 300);
+      }
+      out.attempts.push(entry);
+    } catch (e) {
+      out.attempts.push({ tag: a.tag, error: String(e?.message || e).slice(0, 80) });
+    }
+    await sleep(300);
+  }
+  return out;
 }
 
 // ── 카카오: 지역 검색 → 후보 목록 ──
@@ -414,18 +443,67 @@ async function kakaoDebug(query) {
 }
 
 // ── 네이버: 업체명 검색 → 상세 + 재방문 비율 ──
-async function naverPlace(name, region, recent) {
+// 네이버 검색 주소 후보들 (좌표를 넣어야 하는 신형 → 구형 순)
+function NAVER_SEARCH_ATTEMPTS(query, lng, lat) {
+  const q = encodeURIComponent(query);
+  const coord = lng && lat ? encodeURIComponent(`${lng};${lat}`) : "";
+  return [
+    { tag: "allSearch", url: `https://map.naver.com/p/api/search/allSearch?query=${q}&type=all&searchCoord=${coord}&boundary=` },
+    {
+      tag: "v5",
+      url: `https://map.naver.com/v5/api/search?caller=pcweb&query=${q}&type=all&page=1&displayCount=5&lang=ko${coord ? `&searchCoord=${coord}` : ""}`,
+    },
+    { tag: "instant", url: `https://map.naver.com/p/api/search/instant-search?query=${q}&coords=${lat || ""},${lng || ""}` },
+  ];
+}
+
+// 응답 구조가 달라도 첫 번째 장소를 찾아내는 추출기
+function firstPlaceHit(json) {
+  const direct = [json?.result?.place?.list, json?.place, json?.items, json?.result?.place];
+  for (const arr of direct) if (Array.isArray(arr) && arr.length && arr[0]?.id) return arr[0];
+  // 깊이 탐색: id 와 좌표(x/y 또는 lon/lat)를 가진 항목 배열
+  function walk(o, depth = 0) {
+    if (!o || typeof o !== "object" || depth > 6) return null;
+    if (Array.isArray(o) && o.length && o[0] && typeof o[0] === "object" && o[0].id && (o[0].x != null || o[0].lon != null))
+      return o[0];
+    for (const v of Object.values(o)) {
+      const f = walk(v, depth + 1);
+      if (f) return f;
+    }
+    return null;
+  }
+  return walk(json);
+}
+
+async function naverPlace(name, region, recent, hintLat, hintLng) {
   const shortRegion = (region || "").split(" ").pop() || "";
-  const sUrl = `${ENDPOINTS.naverSearch}?query=${encodeURIComponent(`${shortRegion} ${name}`)}&type=all`;
-  const sr = await fetch(sUrl, { headers: NAVER_HEADERS });
-  if (!sr.ok) throw new Error(`네이버 검색 실패 (${sr.status}) — 서버 IP가 차단됐을 수 있어요.`);
-  const sj = await sr.json().catch(() => null);
-  const first = sj?.result?.place?.list?.[0];
-  if (!first) return { found: false };
+  const fails = [];
+  let first = null;
+  for (const a of NAVER_SEARCH_ATTEMPTS(`${shortRegion} ${name}`, hintLng, hintLat)) {
+    try {
+      const sr = await fetch(a.url, { headers: NAVER_HEADERS });
+      if (!sr.ok) {
+        fails.push(`${a.tag}:${sr.status}`);
+        await sleep(300);
+        continue;
+      }
+      const sj = await sr.json().catch(() => null);
+      first = firstPlaceHit(sj);
+      if (first) break;
+      fails.push(`${a.tag}:no-place`);
+    } catch (e) {
+      fails.push(`${a.tag}:${String(e?.message || e).slice(0, 30)}`);
+    }
+    await sleep(300);
+  }
+  if (!first) {
+    if (fails.every((f) => /:(4|5)\d\d/.test(f))) throw new Error(`네이버 검색 실패 (${fails.join(" · ")})`);
+    return { found: false };
+  }
 
   const pid = String(first.id);
-  const lat = first.y ? Number(first.y) : null;
-  const lng = first.x ? Number(first.x) : null;
+  const lat = first.y != null ? Number(first.y) : first.lat != null ? Number(first.lat) : null;
+  const lng = first.x != null ? Number(first.x) : first.lon != null ? Number(first.lon) : null;
 
   await sleep(400);
   const hr = await fetch(ENDPOINTS.naverHome(pid), { headers: { ...NAVER_HEADERS, Accept: "text/html" } });

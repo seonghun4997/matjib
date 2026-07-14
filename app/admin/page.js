@@ -201,7 +201,6 @@ function CrawlSection({ pass, onDone }) {
         }
         try {
           const d = await api({ mode: "kakao_place", id: c.id, sample: 50 });
-          consecFails = 0;
           const texts = d.texts || [];
           const hit = texts.filter((t) => kw.some((k) => t.includes(k))).length;
           const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
@@ -213,7 +212,7 @@ function CrawlSection({ pass, onDone }) {
           }
 
           await sleep(800);
-          const n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN) });
+          const n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN), lat: c.lat, lng: c.lng });
           if (!n.found) {
             log(`   네이버에서 못 찾음 — 건너뜀`);
             await sleep(800);
@@ -221,6 +220,7 @@ function CrawlSection({ pass, onDone }) {
           }
           log(`   네이버: ${n.category || "?"} · ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%`);
 
+          consecFails = 0;
           finals.push({
             region,
             name: c.name,
@@ -263,13 +263,21 @@ function CrawlSection({ pass, onDone }) {
   async function diagnose() {
     setRunning(true);
     setLogs([]);
-    log("진단 중… (카카오 검색 1회 + 상세 주소 3종 상태 확인)");
+    log("진단 중… (카카오 + 네이버 주소 상태 확인)");
     try {
       const j = await api({ mode: "kakao_debug", query: `${region || "서울 성북동"} 맛집` });
-      log(JSON.stringify(j, null, 2));
+      log("=== 카카오 진단 ===");
+      log(JSON.stringify({ search_status: j.search_status, place_id: j.place_id, detail: (j.detail_attempts || []).map((d) => `${d.tag}:${d.status ?? d.error}`) }, null, 2));
+    } catch (e) {
+      log(`카카오 진단 실패: ${e.message}`);
+    }
+    try {
+      const n = await api({ mode: "naver_debug", query: `성북동 쌍다리돼지불백` });
+      log("=== 네이버 진단 ===");
+      log(JSON.stringify(n, null, 2));
       log("↑ 이 내용을 전부 복사해서 공유해주세요.");
     } catch (e) {
-      log(`진단 실패: ${e.message}`);
+      log(`네이버 진단 실패: ${e.message}`);
     }
     setRunning(false);
   }
