@@ -269,6 +269,31 @@ const num = (o, ...keys) => {
   return 0;
 };
 
+// panel3의 open_hours 를 읽을 수 있는 문자열로 (구조가 유동적이라 방어적으로)
+function kakaoHours(data) {
+  try {
+    const oh = data?.open_hours;
+    if (!oh) return "";
+    const strs = [];
+    (function walk(o, d) {
+      if (o == null || d > 5) return;
+      if (typeof o === "string") {
+        const s = o.trim();
+        if (s && !strs.includes(s)) strs.push(s);
+        return;
+      }
+      if (typeof o !== "object") return;
+      for (const v of Object.values(o)) walk(v, d + 1);
+    })(oh.week_from_today?.week_periods || [], 0);
+    if (strs.length) return strs.join(" ").slice(0, 400);
+    const head = oh.headline?.display_text;
+    const info = oh.headline?.display_text_info;
+    return [head, info].filter(Boolean).join(" · ");
+  } catch {
+    return "";
+  }
+}
+
 async function kakaoPlace(id, sample) {
   const fails = [];
 
@@ -298,6 +323,7 @@ async function kakaoPlace(id, sample) {
           theme_fallback: cat.name2 || "",
           texts: texts.slice(0, sample),
           address_hint: data.summary?.address?.road || data.summary?.address?.disp || "",
+          hours_hint: kakaoHours(data),
           kakao_url: `https://place.map.kakao.com/${id}`,
           source: "panel3",
         };
@@ -488,6 +514,11 @@ async function naverPlace(name, region, recent, hintLat, hintLng) {
         continue;
       }
       const sj = await sr.json().catch(() => null);
+      if (sj?.result?.ncaptcha || sj?.result?.type === "ncaptcha") {
+        fails.push(`${a.tag}:captcha`);
+        await sleep(300);
+        continue;
+      }
       first = firstPlaceHit(sj);
       if (first) break;
       fails.push(`${a.tag}:no-place`);
@@ -497,8 +528,7 @@ async function naverPlace(name, region, recent, hintLat, hintLng) {
     await sleep(300);
   }
   if (!first) {
-    if (fails.every((f) => /:(4|5)\d\d/.test(f))) throw new Error(`네이버 검색 실패 (${fails.join(" · ")})`);
-    return { found: false };
+    return { found: false, captcha: fails.some((f) => f.includes("captcha")) };
   }
 
   const pid = String(first.id);

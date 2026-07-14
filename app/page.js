@@ -447,7 +447,7 @@ function RestaurantCard({ r, pass }) {
         <Field label="카카오 평점" value={<span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.kakao_rating).toFixed(1)}</span>} />
         <Field label="카카오 리뷰" value={`${Number(r.kakao_reviews).toLocaleString()}개`} />
         <Field label="맛 관련 리뷰 비율" value={`${r.taste_pct}% (${tastePctToRatio(Number(r.taste_pct))})`} />
-        <Field label="재방문 비율" value={`${r.revisit_pct}%`} />
+        <Field label="재방문 비율" value={r.revisit_pct == null ? "미측정" : `${r.revisit_pct}%`} />
         <Field label="네이버 평점" value={r.naver_rating ? <span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.naver_rating).toFixed(2)}</span> : "—"} />
         <Field label="네이버 리뷰" value={r.naver_reviews ? `${Number(r.naver_reviews).toLocaleString()}개` : "—"} />
         <Field label="주소" value={r.address || "—"} span={2} />
@@ -560,32 +560,34 @@ function NewRegionCrawl({ onDone }) {
           const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
 
           await sleep(800);
-          const n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30, lat: c.lat, lng: c.lng });
-          if (!n.found) {
-            log(`(${i}/${candidates.length}) ${c.name} — 네이버 미확인, 건너뜀`);
-            await sleep(800);
-            continue;
-          }
-          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}%(표본 ${texts.length}) · 재방문 ${n.revisit_pct}% ✓`);
+          let n = { found: false };
+          try {
+            n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30, lat: c.lat, lng: c.lng });
+          } catch {}
+          log(
+            n.found
+              ? `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%(표본 ${texts.length}) · 재방문 ${n.revisit_pct}% ✓`
+              : `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%(표본 ${texts.length}) · 네이버 ${n.captcha ? "차단" : "미확인"} → 카카오 정보로 저장 ✓`
+          );
 
           consecFails = 0;
           finals.push({
             region,
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
-            category: n.category || d.category || c.cate_leaf || "",
+            category: (n.found && n.category) || d.category || c.cate_leaf || "",
             kakao_rating: d.rating,
             kakao_reviews: d.reviews,
             taste_pct: taste,
-            naver_rating: n.naver_rating,
-            naver_reviews: n.naver_reviews,
-            revisit_pct: n.revisit_pct,
-            address: n.address || d.address_hint || "",
-            hours: n.hours || "",
-            lat: n.lat ?? c.lat ?? null,
-            lng: n.lng ?? c.lng ?? null,
+            naver_rating: n.found ? n.naver_rating : null,
+            naver_reviews: n.found ? n.naver_reviews : null,
+            revisit_pct: n.found ? n.revisit_pct : null,
+            address: (n.found && n.address) || d.address_hint || "",
+            hours: (n.found && n.hours) || d.hours_hint || "",
+            lat: (n.found ? n.lat : null) ?? c.lat ?? null,
+            lng: (n.found ? n.lng : null) ?? c.lng ?? null,
             kakao_url: d.kakao_url || "",
-            naver_url: n.naver_url || "",
+            naver_url: n.found ? n.naver_url || "" : "",
           });
         } catch (e) {
           consecFails++;

@@ -212,32 +212,30 @@ function CrawlSection({ pass, onDone }) {
           }
 
           await sleep(800);
-          const n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN), lat: c.lat, lng: c.lng });
-          if (!n.found) {
-            log(`   네이버에서 못 찾음 — 건너뜀`);
-            await sleep(800);
-            continue;
-          }
-          log(`   네이버: ${n.category || "?"} · ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%`);
+          let n = { found: false };
+          try {
+            n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN), lat: c.lat, lng: c.lng });
+          } catch {}
+          log(n.found ? `   네이버: ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%` : `   네이버 ${n.captcha ? "차단(캡차)" : "미확인"} → 카카오 정보로 저장`);
 
           consecFails = 0;
           finals.push({
             region,
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
-            category: n.category || d.category || c.cate_leaf || "",
+            category: (n.found && n.category) || d.category || c.cate_leaf || "",
             kakao_rating: d.rating,
             kakao_reviews: d.reviews,
             taste_pct: taste,
-            naver_rating: n.naver_rating,
-            naver_reviews: n.naver_reviews,
-            revisit_pct: n.revisit_pct,
-            address: n.address || d.address_hint || "",
-            hours: n.hours || "",
-            lat: n.lat ?? c.lat ?? null,
-            lng: n.lng ?? c.lng ?? null,
+            naver_rating: n.found ? n.naver_rating : null,
+            naver_reviews: n.found ? n.naver_reviews : null,
+            revisit_pct: n.found ? n.revisit_pct : null,
+            address: (n.found && n.address) || d.address_hint || "",
+            hours: (n.found && n.hours) || d.hours_hint || "",
+            lat: (n.found ? n.lat : null) ?? c.lat ?? null,
+            lng: (n.found ? n.lng : null) ?? c.lng ?? null,
             kakao_url: d.kakao_url || "",
-            naver_url: n.naver_url || "",
+            naver_url: n.found ? n.naver_url || "" : "",
           });
         } catch (e) {
           consecFails++;
