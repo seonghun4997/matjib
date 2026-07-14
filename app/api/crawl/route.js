@@ -186,9 +186,12 @@ async function kakaoSearch(query, limit) {
       out.push({
         id: String(p.confirmid || p.cid || p.docid || p.id || ""),
         name: (p.name || "").trim(),
-        favorite: Number(p.favorite_cnt || p.favorCnt || 0),
-        theme: parts.length > 1 ? parts[1] : parts[0] || "",
-        cate_leaf: parts.length ? parts[parts.length - 1] : "",
+        // 즐겨찾기 수치가 신형 응답에 없어 검색의 리뷰 수를 랭킹 대체값으로 사용
+        favorite: Number(p.favorite_cnt || p.favorCnt || p.reviewCount || 0),
+        theme: p.cate_name_depth2 || (parts.length > 1 ? parts[1] : parts[0] || ""),
+        cate_leaf: p.last_cate_name || (parts.length ? parts[parts.length - 1] : ""),
+        lat: p.lat != null ? Number(p.lat) : null,
+        lng: p.lon != null ? Number(p.lon) : null,
       });
     }
     await sleep(400);
@@ -239,7 +242,48 @@ const num = (o, ...keys) => {
 
 async function kakaoPlace(id, sample) {
   const fails = [];
-  for (const a of DETAIL_ATTEMPTS(id)) {
+
+  // ① 신형 panel3 — 진단으로 확인한 실제 구조 (kakaomap_review.score_set)
+  try {
+    const a = DETAIL_ATTEMPTS(id).find((x) => x.tag === "panel3");
+    const res = await fetch(a.url, { headers: a.headers });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const ks = data?.kakaomap_review?.score_set;
+      if (ks && (ks.review_count != null || ks.average_score != null)) {
+        const texts = (data.kakaomap_review.reviews || [])
+          .map((rv) => rv?.contents || "")
+          .filter(Boolean);
+        const cat = data.summary?.category || {};
+        const cnt = Number(ks.review_count || 0);
+        return {
+          rating:
+            ks.average_score != null
+              ? Math.round(Number(ks.average_score) * 100) / 100
+              : cnt
+              ? Math.round((Number(ks.total_score || 0) / cnt) * 100) / 100
+              : 0,
+          reviews: cnt,
+          favorite: 0,
+          category: cat.name4 || cat.name3 || cat.name || "",
+          theme_fallback: cat.name2 || "",
+          texts: texts.slice(0, sample),
+          address_hint: data.summary?.address?.road || data.summary?.address?.disp || "",
+          kakao_url: `https://place.map.kakao.com/${id}`,
+          source: "panel3",
+        };
+      }
+      fails.push("panel3:no-score_set");
+    } else {
+      fails.push(`panel3:${res.status}`);
+    }
+  } catch (e) {
+    fails.push(`panel3:${String(e?.message || e).slice(0, 40)}`);
+  }
+  await sleep(300);
+
+  // ② 구형 main/v — 혹시 되살아나는 경우 대비한 예비
+  for (const a of DETAIL_ATTEMPTS(id).filter((x) => x.tag !== "panel3")) {
     try {
       const res = await fetch(a.url, { headers: a.headers });
       if (!res.ok) {
@@ -251,54 +295,22 @@ async function kakaoPlace(id, sample) {
         fails.push(`${a.tag}:not-json`);
         continue;
       }
-      // 평점 칸 이름 후보들 (구형 → 신형 추정 순)
-      const PAIRS = [
-        { sum: ["scoresum", "scoreSum", "score_sum"], cnt: ["scorecnt", "scoreCnt", "score_cnt"], avg: [] },
-        { sum: ["starSum", "starsum"], cnt: ["starCnt", "starcnt"], avg: [] },
-        { sum: [], cnt: ["reviewCount", "reviewCnt", "starPointCnt", "scoreCount"], avg: ["averageReview", "avgStarPoint", "starPointAvg", "scoreAvg", "averageStarPoint", "avgReview"] },
-      ];
-      let feed = null, scoreSum = 0, scoreCnt = 0, avgDirect = 0;
-      for (const pr of PAIRS) {
-        feed = deepFind(data, (o) => {
-          const hasCnt = pr.cnt.some((k) => k in o);
-          const hasSum = pr.sum.some((k) => k in o);
-          const hasAvg = pr.avg.some((k) => k in o);
-          return hasCnt && (hasSum || hasAvg);
-        });
-        if (feed) {
-          scoreSum = num(feed, ...pr.sum);
-          scoreCnt = num(feed, ...pr.cnt);
-          avgDirect = num(feed, ...pr.avg);
-          break;
-        }
-      }
+      const feed = deepFind(data, (o) => "scoresum" in o && "scorecnt" in o);
       if (!feed) {
         fails.push(`${a.tag}:no-score`);
         continue;
       }
-      const cat = deepFind(data, (o) => "catename" in o || "cateName" in o) || {};
-
-      let texts = (deepFindComments(data) || []).map((c) => c.contents ?? c.content ?? "").filter(Boolean);
-      for (let page = 2; page <= 4 && texts.length < sample; page++) {
-        await sleep(400);
-        try {
-          const cr = await fetch(ENDPOINTS.kakaoComments(id, page), { headers: KAKAO_HEADERS });
-          if (!cr.ok) break;
-          const list = deepFindComments(await cr.json()) || [];
-          if (!list.length) break;
-          texts = texts.concat(list.map((c) => c.contents ?? c.content ?? "").filter(Boolean));
-        } catch {
-          break;
-        }
-      }
-
+      const scoreCnt = num(feed, "scorecnt");
+      const cat = deepFind(data, (o) => "catename" in o) || {};
+      const texts = (deepFindComments(data) || []).map((c) => c.contents ?? c.content ?? "").filter(Boolean);
       return {
-        rating: avgDirect ? Math.round(avgDirect * 100) / 100 : scoreCnt ? Math.round((scoreSum / scoreCnt) * 100) / 100 : 0,
-        reviews: num(feed, "comntcnt", "comntCnt", "comment_cnt") || scoreCnt,
-        favorite: num(feed, "favoriteCnt", "favorite_cnt"),
-        category: cat.catename || cat.cateName || "",
-        theme_fallback: cat.cate1name || cat.cate1Name || "",
+        rating: scoreCnt ? Math.round((num(feed, "scoresum") / scoreCnt) * 100) / 100 : 0,
+        reviews: num(feed, "comntcnt") || scoreCnt,
+        favorite: num(feed, "favoriteCnt"),
+        category: cat.catename || "",
+        theme_fallback: cat.cate1name || "",
         texts: texts.slice(0, sample),
+        address_hint: "",
         kakao_url: `https://place.map.kakao.com/${id}`,
         source: a.tag,
       };

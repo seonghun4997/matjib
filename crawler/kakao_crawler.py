@@ -14,8 +14,8 @@ import requests
 # ── 구조가 바뀌면 여기만 수정 ─────────────────────────────
 ENDPOINTS = {
     "search": "https://search.map.kakao.com/mapsearch/map.daum",
-    "place_detail": "https://place.map.kakao.com/main/v/{place_id}",
-    "comments": "https://place.map.kakao.com/commentlist/v/{place_id}/{page}",
+    # 2025~ 신형 상세 API (구형 main/v 는 폐기됨)
+    "place_detail": "https://place-api.map.kakao.com/places/panel3/{place_id}",
 }
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
@@ -75,45 +75,37 @@ def extract_theme(p: dict) -> str:
 
 
 def fetch_detail(place_id: str) -> dict | None:
-    """가게 상세 — 평점, 리뷰 수, 즐겨찾기 수."""
+    """가게 상세 (신형 panel3) — 평점, 리뷰 수, 카테고리, 리뷰 텍스트."""
     url = ENDPOINTS["place_detail"].format(place_id=place_id)
-    r = requests.get(url, headers=HEADERS, timeout=10)
+    headers = {
+        **HEADERS,
+        "pf": "web",
+        "Origin": "https://place.map.kakao.com",
+        "Referer": f"https://place.map.kakao.com/{place_id}",
+    }
+    r = requests.get(url, headers=headers, timeout=10)
     if r.status_code != 200:
         return None
     data = r.json()
-    basic = data.get("basicInfo", {}) or {}
-    feed = basic.get("feedback", {}) or {}
-    score_sum = feed.get("scoresum", 0)
-    score_cnt = feed.get("scorecnt", 0)
-    cat = basic.get("category", {}) if isinstance(basic.get("category"), dict) else {}
+    ks = (data.get("kakaomap_review") or {}).get("score_set") or {}
+    if not ks:
+        return None
+    cnt = int(ks.get("review_count") or 0)
+    avg = ks.get("average_score")
+    cat = (data.get("summary") or {}).get("category") or {}
+    texts = [
+        (rv or {}).get("contents", "")
+        for rv in (data.get("kakaomap_review") or {}).get("reviews", []) or []
+        if (rv or {}).get("contents")
+    ]
     return {
-        "theme_fallback": cat.get("cate1name") or "",
-        "rating": round(score_sum / score_cnt, 2) if score_cnt else 0,
-        "reviews": int(feed.get("comntcnt") or score_cnt or 0),
-        "favorite": int(feed.get("favoriteCnt") or 0),
-        "category": cat.get("catename", ""),
-        "theme": basic.get("category", {}).get("cate1name", "") if isinstance(basic.get("category"), dict) else "",
+        "rating": round(float(avg), 2) if avg is not None else (round(ks.get("total_score", 0) / cnt, 2) if cnt else 0),
+        "reviews": cnt,
+        "category": cat.get("name4") or cat.get("name3") or cat.get("name") or "",
+        "theme_fallback": cat.get("name2") or "",
+        "texts": texts,
         "url": f"https://place.map.kakao.com/{place_id}",
-        "_raw_comments": (data.get("comment", {}) or {}).get("list", []) or [],
     }
-
-
-def fetch_review_texts(place_id: str, first_page_comments: list, sample: int) -> list[str]:
-    """최근 리뷰 텍스트 수집 (첫 페이지는 상세 응답에 포함)."""
-    texts = [c.get("contents", "") for c in first_page_comments if c.get("contents")]
-    page = 2
-    while len(texts) < sample and page <= 5:
-        url = ENDPOINTS["comments"].format(place_id=place_id, page=page)
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code != 200:
-            break
-        lst = (r.json().get("comment", {}) or {}).get("list", []) or []
-        if not lst:
-            break
-        texts += [c.get("contents", "") for c in lst if c.get("contents")]
-        page += 1
-        time.sleep(DELAY)
-    return texts[:sample]
 
 
 def taste_pct(texts: list[str], keywords: list[str]) -> float:
@@ -142,7 +134,7 @@ def crawl_region(region: str, cfg: dict) -> list[dict]:
         if not d:
             continue
 
-        texts = fetch_review_texts(c["kakao_id"], d.pop("_raw_comments"), cfg["kakao_review_sample"])
+        texts = d.get("texts", [])[: cfg["kakao_review_sample"]]
         row = {
             "region": region,
             "name": c["name"],
@@ -150,7 +142,7 @@ def crawl_region(region: str, cfg: dict) -> list[dict]:
             "kakao_rating": d["rating"],
             "kakao_reviews": d["reviews"],
             "taste_pct": taste_pct(texts, cfg["taste_keywords"]),
-            "favorite": max(d["favorite"], c["favorite"]),
+            "favorite": c["favorite"],
             "kakao_category": d["category"],
             "kakao_theme": c.get("theme") or d.get("theme") or "",
             "kakao_url": d["url"],

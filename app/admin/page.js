@@ -232,10 +232,10 @@ function CrawlSection({ pass, onDone }) {
             naver_rating: n.naver_rating,
             naver_reviews: n.naver_reviews,
             revisit_pct: n.revisit_pct,
-            address: n.address || "",
+            address: n.address || d.address_hint || "",
             hours: n.hours || "",
-            lat: n.lat,
-            lng: n.lng,
+            lat: n.lat ?? c.lat ?? null,
+            lng: n.lng ?? c.lng ?? null,
             kakao_url: d.kakao_url || "",
             naver_url: n.naver_url || "",
           });

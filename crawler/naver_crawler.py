@@ -174,6 +174,6 @@ def enrich(row: dict, recent_n: int) -> dict:
         "revisit_pct": revisit_pct,
         "revisit_count": revisit_cnt,
         "naver_url": info.get("naver_url", ""),
-        "lat": place["lat"],
-        "lng": place["lng"],
+        "lat": place["lat"] or row.get("lat"),
+        "lng": place["lng"] or row.get("lng"),
     }

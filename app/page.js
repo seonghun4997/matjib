@@ -567,7 +567,7 @@ function NewRegionCrawl({ onDone }) {
             await sleep(800);
             continue;
           }
-          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}% · 재방문 ${n.revisit_pct}% ✓`);
+          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}%(표본 ${texts.length}) · 재방문 ${n.revisit_pct}% ✓`);
 
           finals.push({
             region,
@@ -580,10 +580,10 @@ function NewRegionCrawl({ onDone }) {
             naver_rating: n.naver_rating,
             naver_reviews: n.naver_reviews,
             revisit_pct: n.revisit_pct,
-            address: n.address || "",
+            address: n.address || d.address_hint || "",
             hours: n.hours || "",
-            lat: n.lat,
-            lng: n.lng,
+            lat: n.lat ?? c.lat ?? null,
+            lng: n.lng ?? c.lng ?? null,
             kakao_url: d.kakao_url || "",
             naver_url: n.naver_url || "",
           });
