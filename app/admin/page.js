@@ -297,6 +297,8 @@ function makeHighlight(d, texts, foodOk, moodOk) {
 // ─────────────────────────────────────────────
 function CrawlSection({ pass, f, onDone }) {
   const [region, setRegion] = useState("");
+  const stopRef = useRef(false);
+  const [queue, setQueue] = useState(null); // { total, done, current }
   const [collectType, setCollectType] = useState("both");
   const [skipExisting, setSkipExisting] = useState(true);
   const [keywords, setKeywords] = useState(TASTE_KEYWORDS.join(", "));
@@ -309,6 +311,17 @@ function CrawlSection({ pass, f, onDone }) {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
+
+  // 수집 중 새로고침/닫기 경고 (저장은 가게 단위라 잃는 건 이후 분량뿐)
+  useEffect(() => {
+    if (!running) return;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [running]);
 
   const log = (t) => setLogs((l) => [...l, t]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -324,12 +337,40 @@ function CrawlSection({ pass, f, onDone }) {
     return j;
   }
 
+  // 줄바꿈/쉼표로 여러 지역 입력 → 큐로 순차 수집
   async function run() {
-    if (!region.trim()) return alert("지역을 입력하세요. 예: 서울 성북구 성북동");
+    const regions = region
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!regions.length) return alert("지역을 입력하세요. 예: 서울 성북구 성북동");
     if (!hasSupabase) return alert("Supabase 연결 후 사용 가능합니다.");
+
+    stopRef.current = false;
     setRunning(true);
     setLogs([]);
     setProg(null);
+    let grandTotal = 0;
+
+    for (let qi = 0; qi < regions.length; qi++) {
+      if (stopRef.current) {
+        log(`■ 중단됨 — 여기까지 저장된 ${grandTotal}곳은 모두 반영됐어요.`);
+        break;
+      }
+      setQueue({ total: regions.length, done: qi, current: regions[qi] });
+      if (regions.length > 1) log(`\n===== [${qi + 1}/${regions.length}] ${regions[qi]} =====`);
+      const saved = await runOne(regions[qi]);
+      grandTotal += saved;
+      onDone && onDone();
+    }
+
+    if (!stopRef.current && regions.length > 1) log(`\n✓ 전체 완료 — 총 ${grandTotal}곳 저장`);
+    setQueue(null);
+    setRunning(false);
+    setProg(null);
+  }
+
+  async function runOne(region) {
     const kw = keywords.split(",").map((s) => s.trim()).filter(Boolean);
     let savedCount = 0;
 
@@ -337,7 +378,7 @@ function CrawlSection({ pass, f, onDone }) {
     if (skipExisting) {
       const { data } = await supabase.from("restaurants").select("name").eq("region", region.trim());
       existing = new Set((data || []).map((x) => x.name));
-      if (existing.size) log(`이 동네에 이미 ${existing.size}곳이 있어요 — 새 가게만 검수합니다.`);
+      if (existing.size) log(`이미 ${existing.size}곳 있음 — 새 가게만 검수합니다.`);
     }
 
     try {
@@ -353,8 +394,13 @@ function CrawlSection({ pass, f, onDone }) {
       let i = 0;
       let consecFails = 0;
       for (const c of candidates) {
+        if (stopRef.current) {
+          log(`■ 중단 — ${region}에서 ${savedCount}곳 저장 완료 (모두 반영됨)`);
+          break;
+        }
         i++;
         setProg({ i, total: candidates.length, saved: savedCount });
+        if (!c.name || !c.id) continue;
         if (skipExisting && existing.has(c.name)) {
           log(`(${i}/${candidates.length}) ${c.name} — 이미 수집됨, 건너뜀`);
           continue;
@@ -412,7 +458,11 @@ function CrawlSection({ pass, f, onDone }) {
             suspect_reasons: d.suspect_reasons || null,
             hidden: autoHide,
           };
-          const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
+          let { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
+          if (error) {
+            await sleep(1200);
+            ({ error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" }));
+          }
           if (error) {
             log(`   저장 실패: ${error.message}`);
           } else {
@@ -427,13 +477,11 @@ function CrawlSection({ pass, f, onDone }) {
         await sleep(500);
       }
 
-      log(savedCount ? `✓ 완료 — 새로 ${savedCount}곳 저장. 아래 ③에서 네이버 검증을 진행하세요.` : "새로 저장된 가게가 없어요. ①의 기준을 조정해보세요.");
-      onDone && onDone();
+      log(savedCount ? `✓ ${region} 완료 — 새로 ${savedCount}곳 저장` : `${region}: 새로 저장된 가게 없음 (기준 조정 또는 이미 수집됨)`);
     } catch (e) {
-      log(`! 중단: ${e.message}`);
+      log(`! ${region} 오류: ${e.message}`);
     }
-    setRunning(false);
-    setProg(null);
+    return savedCount;
   }
 
   async function diagnose() {
@@ -456,19 +504,20 @@ function CrawlSection({ pass, f, onDone }) {
         ② 수집 <span style={{ fontSize: 12, fontWeight: 400, color: "var(--sub)" }}>— 카카오맵에서 동 전체 검수</span>
       </h2>
       <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
-        검색 결과를 끝까지 검수해요 (놓치는 가게 없음). 가게마다 즉시 저장되니 중간에 멈춰도 그때까지는 남아요.
-        맛·분위기 기준을 둘 다 넘는 가게는 두 유형 모두로 표시돼요.
+        여러 동네를 줄바꿈으로 입력하면 자동으로 순차 수집해요. 가게마다 즉시 저장되니 [중단]하거나 창을 닫아도
+        그때까지 저장된 건 모두 반영됩니다. 맛·분위기 기준을 둘 다 넘는 가게는 두 유형 모두로 표시돼요.
       </p>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 12 }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div className="field-label">지역</div>
-          <input
-            placeholder="예: 서울 성북구 성북동"
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div className="field-label">지역 (여러 줄 = 자동 순차 수집)</div>
+          <textarea
+            placeholder={"서울 성북구 성북동\n서울 마포구 연남동\n서울 성동구 성수동"}
             value={region}
             onChange={(e) => setRegion(e.target.value)}
             disabled={running}
-            style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13.5 }}
+            rows={3}
+            style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13.5, fontFamily: "inherit", resize: "vertical" }}
           />
         </div>
         <div>
@@ -498,13 +547,24 @@ function CrawlSection({ pass, f, onDone }) {
             ))}
           </div>
         </div>
-        <button
-          onClick={run}
-          disabled={running}
-          style={{ padding: "9px 20px", background: running ? "var(--sub)" : "var(--stamp)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5, fontWeight: 600 }}
-        >
-          {running ? "수집 중…" : "수집 시작"}
-        </button>
+        {running ? (
+          <button
+            onClick={() => {
+              stopRef.current = true;
+              log("■ 중단 요청 — 진행 중인 가게까지 저장하고 멈춥니다…");
+            }}
+            style={{ padding: "9px 20px", background: "#b91c1c", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5, fontWeight: 600 }}
+          >
+            중단
+          </button>
+        ) : (
+          <button
+            onClick={run}
+            style={{ padding: "9px 20px", background: "var(--stamp)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5, fontWeight: 600 }}
+          >
+            수집 시작
+          </button>
+        )}
         <button
           onClick={diagnose}
           disabled={running}
@@ -533,6 +593,11 @@ function CrawlSection({ pass, f, onDone }) {
         />
       )}
 
+      {queue && queue.total > 1 && (
+        <p style={{ fontSize: 12, color: "var(--stamp)", fontWeight: 600, marginBottom: 6 }}>
+          지역 {queue.done + 1}/{queue.total} — {queue.current}
+        </p>
+      )}
       {prog && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--sub)", marginBottom: 4 }}>

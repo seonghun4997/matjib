@@ -44,7 +44,7 @@ export default function Home() {
       return;
     }
     setDbError("");
-    const clean = (r.data || []).filter((x) => !x.hidden);
+    const clean = (r.data || []).filter((x) => !x.hidden && x.name);
     setRows(clean.length ? clean : SAMPLE_RESTAURANTS);
     if (s.data) {
       setF({
@@ -63,6 +63,14 @@ export default function Home() {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 선택한 지역/테마가 목록에서 사라지면 '전체'로 자동 복구
+  useEffect(() => {
+    if (!loading && region !== "전체" && !rows.some((r) => r.region === region)) setRegion("전체");
+  }, [rows, region, loading]);
+  useEffect(() => {
+    if (!loading && theme !== "전체" && !rows.some((r) => r.theme === theme)) setTheme("전체");
+  }, [rows, theme, loading]);
 
   const regions = useMemo(
     () => ["전체", ...Array.from(new Set(rows.map((r) => r.region))).sort()],
@@ -100,15 +108,15 @@ export default function Home() {
   const SORTS = {
     reco: (a, b) =>
       (naverPass(b) ? 1 : 0) - (naverPass(a) ? 1 : 0) || Number(b.kakao_rating) - Number(a.kakao_rating),
-    rating: (a, b) => Number(b.kakao_rating) - Number(a.kakao_rating),
+    rating: (a, b) => Number(b.kakao_rating ?? 0) - Number(a.kakao_rating ?? 0),
     revisit: (a, b) => Number(b.revisit_pct ?? -1) - Number(a.revisit_pct ?? -1),
-    reviews: (a, b) => Number(b.kakao_reviews) - Number(a.kakao_reviews),
+    reviews: (a, b) => Number(b.kakao_reviews ?? 0) - Number(a.kakao_reviews ?? 0),
   };
 
   const scoped = rows.filter(inScope);
   const visible = scoped
     .filter(passes)
-    .filter((r) => !search.trim() || r.name.includes(search.trim()) || (r.category || "").includes(search.trim()))
+    .filter((r) => !search.trim() || (r.name || "").includes(search.trim()) || (r.category || "").includes(search.trim()))
     .sort(SORTS[sort]);
   const passCount = scoped.filter(passes).length;
   const naverCount = scoped.filter((r) => tier(r) === "naver").length;
@@ -348,8 +356,19 @@ function TypeChips({ food, mood }) {
   );
 }
 
+// 안전한 숫자 포맷 (결측 방어)
+const num = (v, digits = 0) => (v == null || isNaN(Number(v)) ? null : Number(v).toFixed(digits));
+
 function RestaurantCard({ r, tier, food, mood }) {
   const hl = cleanHighlight(r.highlight);
+  // 대표 태그: 맛 vs 분위기 중 높은 쪽
+  const tasteP = Number(r.taste_pct ?? 0);
+  const moodP = Number(r.mood_pct ?? 0);
+  const isFoodMain = tasteP >= moodP;
+  const tagPct = isFoodMain ? (r.taste_pct != null ? tasteP : null) : (r.mood_pct != null ? moodP : null);
+  const tagLabel = isFoodMain ? "맛" : "분위기";
+  const tagCount =
+    tagPct != null && r.kakao_reviews != null ? Math.round((Number(r.kakao_reviews) * tagPct) / 100) : null;
   return (
     <article className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
@@ -395,11 +414,26 @@ function RestaurantCard({ r, tier, food, mood }) {
         </span>
       </div>
 
-      <p style={{ fontSize: 12.5, color: "var(--sub)", marginTop: 2 }}>
-        <span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.kakao_rating).toFixed(1)}</span>
-        {" · "}리뷰 {Number(r.kakao_reviews).toLocaleString()}개
-        {r.revisit_pct != null && ` · 재방문 ${r.revisit_pct}%`}
-      </p>
+      <div className="metrics">
+        <span>
+          <b style={{ color: "var(--brass)" }}>★ {num(r.kakao_rating, 1) ?? "—"}</b>
+          <em>카카오 평점</em>
+        </span>
+        <span>
+          <b>{r.kakao_reviews != null ? Number(r.kakao_reviews).toLocaleString() : "—"}</b>
+          <em>카카오 리뷰</em>
+        </span>
+        <span>
+          <b style={{ color: r.revisit_pct != null ? "var(--stamp)" : "var(--sub)" }}>
+            {r.revisit_pct != null ? `${r.revisit_pct}%` : "미검증"}
+          </b>
+          <em>재방문</em>
+        </span>
+        <span>
+          <b>{tagCount != null ? `${tagCount}명 (${tagPct}%)` : "—"}</b>
+          <em>{tagLabel} 꼽음</em>
+        </span>
+      </div>
 
       <div className="card-actions" style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
         <a

@@ -180,3 +180,19 @@ input[type="range"] { accent-color: var(--stamp); width: 100%; }
   .card-actions a, .card-actions button { flex: 1; justify-content: center; min-width: 130px; }
   .serif { letter-spacing: -0.3px; }
 }
+
+/* ── 카드 지표 4종 ── */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--line);
+}
+.metrics span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.metrics b { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metrics em { font-size: 10.5px; color: var(--sub); font-style: normal; }
+@media (max-width: 640px) {
+  .metrics { grid-template-columns: repeat(2, 1fr); gap: 10px 8px; }
+}

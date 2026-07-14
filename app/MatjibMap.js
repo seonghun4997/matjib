@@ -84,7 +84,15 @@ export default function MatjibMap({ places }) {
     layer.clearLayers();
     markersRef.current.clear();
 
-    const pts = places.filter((p) => p.lat && p.lng);
+    const pts = places.filter(
+      (p) =>
+        p.lat != null &&
+        p.lng != null &&
+        !isNaN(Number(p.lat)) &&
+        !isNaN(Number(p.lng)) &&
+        Math.abs(Number(p.lat)) <= 90 &&
+        Math.abs(Number(p.lng)) <= 180
+    );
     pts.forEach((p) => {
       const icon = L.divIcon({
         className: "",
