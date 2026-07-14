@@ -29,20 +29,32 @@ export default function Home() {
         setLoading(false);
         return;
       }
-      const { data, error } = await supabase
-        .from("places")
-        .select(
-          "id,kakao_id,region,name,theme,category,is_food,is_mood,kakao_rating,kakao_reviews,taste_count,taste_pct,mood_count,mood_pct,revisit_pct,trust_tier,highlight,top_menu,lat,lng,kakao_url,naver_url"
-        )
-        .eq("status", "live")
-        .order("kakao_rating", { ascending: false });
-      setPlaces(error || !data?.length ? SAMPLE : data);
+      try {
+        const { data, error } = await supabase
+          .from("places")
+          .select(
+            "id,kakao_id,region,name,theme,category,is_food,is_mood,kakao_rating,kakao_reviews,taste_count,taste_pct,mood_count,mood_pct,revisit_pct,trust_tier,highlight,top_menu,lat,lng,kakao_url,naver_url"
+          )
+          .eq("status", "live")
+          .order("kakao_rating", { ascending: false });
+        if (error) {
+          console.warn("places load error:", error.message);
+          setPlaces(SAMPLE);
+        } else {
+          const clean = (data || []).filter((x) => x && x.id && x.name);
+          setPlaces(clean.length ? clean : SAMPLE);
+        }
+      } catch (e) {
+        console.warn(e);
+        setPlaces(SAMPLE);
+      }
       setLoading(false);
     })();
   }, []);
 
   // 공유 링크 복원 & 주소 반영
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const q = new URLSearchParams(window.location.search);
     const r = q.get("region");
     const t = q.get("type");
@@ -51,6 +63,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const q = new URLSearchParams();
     if (region !== "전체") q.set("region", region);
     if (type !== "전체") q.set("type", type);
@@ -187,9 +200,21 @@ export default function Home() {
         <div id="map-anchor" style={{ marginBottom: 8 }}>
           <Map places={scoped} />
         </div>
-        <p style={{ fontSize: 11.5, color: "var(--sub)", marginBottom: 20 }}>
-          <b style={{ color: "var(--blue)" }}>● 진한 핀</b> 무조건 맛집 보장 · <span style={{ color: "#93b8ee" }}>●</span> 맛집일 확률 높음
-        </p>
+        <div
+          style={{
+            display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center",
+            fontSize: 11.5, color: "var(--sub)", margin: "8px 2px 20px",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 11, height: 11, borderRadius: 99, background: "var(--blue)", display: "inline-block" }} />
+            <b style={{ color: "var(--blue-deep)" }}>무조건 맛집 보장</b> — 최근 방문객 20명 중 4명 이상이 재방문
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 11, height: 11, borderRadius: 99, background: "#93b8ee", display: "inline-block" }} />
+            <b>맛집일 확률 높음</b> — 평점·리뷰·맛 평가 통과 (재방문 확인 전)
+          </span>
+        </div>
 
         {/* 목록 헤더 */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
@@ -290,12 +315,27 @@ function Card({ p, onShare }) {
           {p.is_food && <span className="badge badge-sm badge-food">🍜 음식맛집</span>}
           {p.is_mood && <span className="badge badge-sm badge-mood">✨ 분위기맛집</span>}
         </div>
-        <span className={`badge badge-sm ${guaranteed ? "badge-naver" : "badge-kakao"}`}>
+        <span
+          className={`badge badge-sm ${guaranteed ? "badge-naver" : "badge-kakao"}`}
+          title={
+            guaranteed
+              ? "카카오 평점·리뷰·맛 평가 통과 + 네이버 최근 리뷰 20개 중 4개 이상이 재방문"
+              : "카카오 평점·리뷰·맛 평가 통과 (네이버 재방문은 아직 확인 전)"
+          }
+        >
           {guaranteed ? "무조건 맛집 보장" : "맛집일 확률 높음"}
         </span>
       </div>
 
-      <h3 style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.35 }}>
+      <h3
+        style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.35, cursor: p.lat ? "pointer" : "default" }}
+        onClick={() => {
+          if (!p.lat || !p.lng) return;
+          window.dispatchEvent(new CustomEvent("matjib:focus", { detail: p.id }));
+          document.getElementById("map-anchor")?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }}
+        title={p.lat ? "지도에서 위치 보기" : undefined}
+      >
         {p.name}
         {p.category && (
           <span style={{ fontSize: 12.5, fontWeight: 400, color: "var(--sub)", marginLeft: 8 }}>{p.category}</span>
@@ -336,17 +376,6 @@ function Card({ p, onShare }) {
         <a className="btn btn-green" href={naver} target="_blank" rel="noreferrer">
           네이버지도에서 보기
         </a>
-        {p.lat && p.lng && (
-          <button
-            className="btn btn-ghost"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent("matjib:focus", { detail: p.id }));
-              document.getElementById("map-anchor")?.scrollIntoView({ behavior: "smooth", block: "center" });
-            }}
-          >
-            지도에서 보기
-          </button>
-        )}
         <button
           className="btn btn-ghost"
           onClick={() =>

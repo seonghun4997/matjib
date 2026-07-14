@@ -35,16 +35,18 @@ export default function Map({ places = [] }) {
       });
     }
 
-    load().then((L) => {
-      if (dead || !box.current || map.current) return;
-      map.current = L.map(box.current, { scrollWheelZoom: false }).setView([37.5665, 126.978], 12);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap",
-        maxZoom: 19,
-      }).addTo(map.current);
-      layer.current = L.layerGroup().addTo(map.current);
-      draw(L);
-    });
+    load()
+      .then((L) => {
+        if (dead || !box.current || map.current || !L || !L.map) return;
+        map.current = L.map(box.current, { scrollWheelZoom: false }).setView([37.5665, 126.978], 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap",
+          maxZoom: 19,
+        }).addTo(map.current);
+        layer.current = L.layerGroup().addTo(map.current);
+        draw(L);
+      })
+      .catch((e) => console.warn("map load failed:", e));
 
     return () => {
       dead = true;
@@ -53,7 +55,13 @@ export default function Map({ places = [] }) {
   }, []);
 
   useEffect(() => {
-    if (window.L && map.current) draw(window.L);
+    if (typeof window !== "undefined" && window.L && map.current && layer.current) {
+      try {
+        draw(window.L);
+      } catch (e) {
+        console.warn("map draw skipped:", e);
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [places]);
 
@@ -70,8 +78,12 @@ export default function Map({ places = [] }) {
   }, []);
 
   function draw(L) {
-    if (!layer.current) return;
-    layer.current.clearLayers();
+    if (!L || !L.marker || !L.divIcon || !layer.current || !map.current) return;
+    try {
+      layer.current.clearLayers();
+    } catch {
+      return;
+    }
     pins.current.clear();
 
     const valid = (places || []).filter(
@@ -81,6 +93,7 @@ export default function Map({ places = [] }) {
     );
 
     valid.forEach((p) => {
+      try {
       const guaranteed = p.trust_tier === "naver";
       const icon = L.divIcon({
         className: "",
@@ -116,11 +129,16 @@ export default function Map({ places = [] }) {
           </a>
         </div>`
       );
+      } catch (e) {
+        console.warn("pin skipped:", p?.name, e);
+      }
     });
 
     if (valid.length) {
-      const b = L.latLngBounds(valid.map((p) => [Number(p.lat), Number(p.lng)]));
-      map.current.fitBounds(b, { padding: [40, 40], maxZoom: 16 });
+      try {
+        const b = L.latLngBounds(valid.map((p) => [Number(p.lat), Number(p.lng)]));
+        map.current.fitBounds(b, { padding: [40, 40], maxZoom: 16 });
+      } catch {}
     }
   }
 

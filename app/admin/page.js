@@ -413,6 +413,7 @@ function Verify({ settings, nudge, onDone }) {
   const [who, setWho] = useState("");
   const [region, setRegion] = useState("전체");
   const [msg, setMsg] = useState("");
+  const [recent, setRecent] = useState([]); // 방금 검증한 것 (되돌리기용)
 
   useEffect(() => {
     if (!hasSupabase) return;
@@ -448,11 +449,25 @@ function Verify({ settings, nudge, onDone }) {
     if (error) return alert(`저장 실패: ${error.message}`);
 
     setList(list.filter((x) => x.id !== p.id));
+    setRecent([{ ...p, count: c, pct, tier }, ...recent].slice(0, 5));
     setMsg(
       tier === "naver"
         ? `✓ ${p.name} — 재방문 ${c}/20 (${pct}%) → '무조건 맛집 보장' 배지가 붙었어요!`
         : `${p.name} — 재방문 ${c}/20 (${pct}%) → 기준 미달, '맛집일 확률 높음'으로 유지돼요`
     );
+    onDone();
+  }
+
+  // 잘못 입력했을 때 되돌리기
+  async function undo(p) {
+    await supabase
+      .from("places")
+      .update({ revisit_count: null, revisit_pct: null, trust_tier: "kakao", verified_at: null, verified_by: null })
+      .eq("id", p.id);
+    setRecent(recent.filter((x) => x.id !== p.id));
+    setList([p, ...list]);
+    setCounts({ ...counts, [p.id]: "" });
+    setMsg(`${p.name} — 검증을 취소했어요. 다시 입력할 수 있어요.`);
     onDone();
   }
 
@@ -494,6 +509,22 @@ function Verify({ settings, nudge, onDone }) {
         </p>
       )}
 
+      {recent.length > 0 && (
+        <div style={{ background: "var(--bg)", borderRadius: 12, padding: "10px 14px", marginBottom: 12 }}>
+          <b style={{ fontSize: 12, color: "var(--sub)" }}>방금 검증함 (잘못 입력했으면 취소)</b>
+          {recent.map((r) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: 12.5 }}>
+              <span style={{ flex: 1 }}>
+                {r.tier === "naver" ? "🔵" : "⚪"} {r.name} — {r.count}/20 ({r.pct}%)
+              </span>
+              <button className="btn btn-sm" style={{ background: "none", color: "var(--danger)" }} onClick={() => undo(r)}>
+                취소
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {list.length === 0 && <p style={{ fontSize: 13, color: "var(--sub)" }}>검증 대기 중인 가게가 없어요 🎉</p>}
 
       {shown.map((p) => (
@@ -502,6 +533,15 @@ function Verify({ settings, nudge, onDone }) {
             {p.name}
             <span style={{ color: "var(--sub)", fontSize: 12 }}> · {p.region}</span>
           </span>
+          <a
+            className="btn btn-ghost btn-sm"
+            href={p.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(p.name)}`}
+            target="_blank"
+            rel="noreferrer"
+            title="같은 가게인지 대조용"
+          >
+            카카오 ↗
+          </a>
           <a className="btn btn-green btn-sm" href={naverLink(p)} target="_blank" rel="noreferrer">
             네이버 열기 ↗
           </a>
@@ -530,14 +570,15 @@ function Verify({ settings, nudge, onDone }) {
 /* ══════════════ 가게 관리 ══════════════ */
 function Manage({ settings, nudge, onDone }) {
   const [list, setList] = useState([]);
-  const [filter, setFilter] = useState("all"); // all | hidden | suspect
+  const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
+  const [open, setOpen] = useState(null); // 펼친 가게 id
 
   useEffect(() => {
     if (!hasSupabase) return;
     supabase
       .from("places")
-      .select("id,name,region,theme,is_food,is_mood,kakao_rating,taste_pct,mood_pct,revisit_pct,suspect_score,suspect_reasons,status,updated_at")
+      .select("*")
       .order("suspect_score", { ascending: false })
       .limit(500)
       .then(({ data }) => setList(data || []));
@@ -557,66 +598,172 @@ function Manage({ settings, nudge, onDone }) {
   }
 
   const shown = list
-    .filter((p) => (filter === "hidden" ? p.status !== "live" : filter === "suspect" ? p.suspect_score > 0 : true))
+    .filter((p) =>
+      filter === "hidden" ? p.status !== "live" : filter === "suspect" ? p.suspect_score > 0 : true
+    )
     .filter((p) => !q.trim() || p.name.includes(q.trim()) || (p.region || "").includes(q.trim()));
+
+  const counts = {
+    all: list.length,
+    suspect: list.filter((p) => p.suspect_score > 0).length,
+    hidden: list.filter((p) => p.status !== "live").length,
+  };
 
   return (
     <section className="card">
-      <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>가게 관리 ({list.length})</h2>
+      <h2 style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>가게 관리</h2>
       <p style={{ fontSize: 12, color: "var(--sub)", lineHeight: 1.7, marginBottom: 12 }}>
-        의심도 {settings.suspect_hide_score}점 이상은 자동으로 숨겨져요. 배지에 마우스를 올리면 근거가 보이고,
-        오판이면 [공개]로 되살릴 수 있어요.
+        가게를 누르면 <b>의심 점수의 근거와 확인 링크</b>가 펼쳐져요. 카카오맵에서 직접 확인한 뒤 공개/숨김을 결정하세요.
       </p>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
         {[
-          ["all", "전체"],
-          ["suspect", "의심 있음"],
-          ["hidden", "숨김/차단"],
+          ["all", `전체 ${counts.all}`],
+          ["suspect", `⚠️ 의심 ${counts.suspect}`],
+          ["hidden", `숨김 ${counts.hidden}`],
         ].map(([v, l]) => (
           <button key={v} className="chip" aria-selected={filter === v} onClick={() => setFilter(v)}>
             {l}
           </button>
         ))}
-        <input className="input" placeholder="가게·동네 검색" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
+        <input
+          className="input"
+          placeholder="가게·동네 검색"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          style={{ flex: 1, minWidth: 140 }}
+        />
       </div>
 
       {shown.length === 0 && <p style={{ fontSize: 13, color: "var(--sub)" }}>해당하는 가게가 없어요.</p>}
 
       {shown.map((p) => (
-        <div key={p.id} className="row" style={{ opacity: p.status === "live" ? 1 : 0.5 }}>
-          <span style={{ flex: 1, minWidth: 150 }}>
-            {p.is_food && "🍜"}
-            {p.is_mood && "✨"} {p.name}
-            <span style={{ color: "var(--sub)", fontSize: 12 }}>
-              {" · "}
-              {p.region} · ★{p.kakao_rating} · 맛 {p.taste_pct ?? "-"}% · 분위기 {p.mood_pct ?? "-"}%
-              {p.revisit_pct != null ? ` · 재방문 ${p.revisit_pct}%` : " · 미검증"}
-            </span>
-          </span>
-
-          {p.suspect_score > 0 && (
-            <span
-              className={`badge badge-sm ${p.suspect_score >= settings.suspect_hide_score ? "badge-danger" : "badge-warn"}`}
-              title={(p.suspect_reasons || []).join("\n") || ""}
-              style={{ cursor: "help" }}
-            >
-              ⚠️ {p.suspect_score}점
-            </span>
-          )}
-          {p.status !== "live" && (
-            <span className="badge badge-sm badge-warn">{p.status === "blocked" ? "차단" : "숨김"}</span>
-          )}
-
-          <button className="btn btn-ghost btn-sm" onClick={() => setStatus(p, p.status === "live" ? "blocked" : "live")}>
-            {p.status === "live" ? "숨기기" : "공개"}
-          </button>
-          <button className="btn btn-sm" style={{ background: "none", color: "var(--danger)" }} onClick={() => remove(p)}>
-            삭제
-          </button>
-        </div>
+        <PlaceRow
+          key={p.id}
+          p={p}
+          settings={settings}
+          isOpen={open === p.id}
+          onToggle={() => setOpen(open === p.id ? null : p.id)}
+          onStatus={setStatus}
+          onRemove={remove}
+        />
       ))}
     </section>
+  );
+}
+
+// 가게 한 줄 + 펼침 상세 (근거·링크·판단)
+function PlaceRow({ p, settings, isOpen, onToggle, onStatus, onRemove }) {
+  const danger = p.suspect_score >= settings.suspect_hide_score;
+  const kakao = p.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(p.name)}`;
+  const naver = `https://map.naver.com/p/search/${encodeURIComponent(`${(p.region || "").split(" ").pop()} ${p.name}`)}`;
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--line)", padding: "12px 0" }}>
+      {/* 요약 줄 — 클릭하면 펼침 */}
+      <div
+        onClick={onToggle}
+        style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", cursor: "pointer", opacity: p.status === "live" ? 1 : 0.55 }}
+      >
+        <span style={{ color: "var(--sub)", fontSize: 12, width: 12 }}>{isOpen ? "▾" : "▸"}</span>
+        <span style={{ flex: 1, minWidth: 140, fontSize: 13.5, fontWeight: 600 }}>
+          {p.is_food && "🍜"}
+          {p.is_mood && "✨"} {p.name}
+          <span style={{ color: "var(--sub)", fontSize: 12, fontWeight: 400 }}> · {p.region}</span>
+        </span>
+
+        {p.suspect_score > 0 && (
+          <span className={`badge badge-sm ${danger ? "badge-danger" : "badge-warn"}`}>⚠️ {p.suspect_score}점</span>
+        )}
+        {p.status !== "live" && (
+          <span className="badge badge-sm badge-warn">{p.status === "blocked" ? "숨김(수동)" : "숨김(자동)"}</span>
+        )}
+        {p.revisit_pct == null && <span style={{ fontSize: 11, color: "var(--sub)" }}>네이버 미검증</span>}
+      </div>
+
+      {/* 펼침 — 판단에 필요한 모든 것 */}
+      {isOpen && (
+        <div style={{ marginTop: 12, padding: "14px 16px", background: "var(--bg)", borderRadius: 12 }}>
+          {/* 지표 */}
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5, marginBottom: 12 }}>
+            <span>
+              평점 <b>★{p.kakao_rating ?? "—"}</b>
+            </span>
+            <span>
+              리뷰 <b>{p.kakao_reviews ?? "—"}개</b>
+            </span>
+            <span>
+              맛 <b>{p.taste_count ?? "—"}명 ({p.taste_pct ?? "—"}%)</b>
+            </span>
+            <span>
+              분위기 <b>{p.mood_count ?? "—"}명 ({p.mood_pct ?? "—"}%)</b>
+            </span>
+            <span>
+              재방문 <b>{p.revisit_pct != null ? `${p.revisit_pct}%` : "미검증"}</b>
+            </span>
+          </div>
+
+          {p.highlight && (
+            <p style={{ fontSize: 13, color: "var(--body)", marginBottom: 12, lineHeight: 1.6 }}>
+              💬 {p.highlight}
+            </p>
+          )}
+
+          {/* ★ 의심 점수의 근거 — 어떻게 나온 점수인지 */}
+          <div
+            style={{
+              background: p.suspect_score > 0 ? (danger ? "var(--danger-soft)" : "var(--warn-soft)") : "#fff",
+              borderRadius: 10,
+              padding: "12px 14px",
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: danger ? "var(--danger)" : p.suspect_score > 0 ? "var(--warn)" : "var(--body)", marginBottom: 6 }}>
+              조작 의심도 {p.suspect_score ?? 0}점 / 100점
+              {p.suspect_score > 0 && (danger ? ` — ${settings.suspect_hide_score}점 이상이라 자동 숨김됨` : " — 기준 미만이라 공개 중")}
+            </div>
+            {p.suspect_reasons?.length > 0 ? (
+              <ul style={{ fontSize: 12, color: "var(--body)", lineHeight: 1.9, margin: "0 0 0 16px" }}>
+                {p.suspect_reasons.map((r, i) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ fontSize: 12, color: "var(--sub)" }}>의심 신호가 발견되지 않았어요.</p>
+            )}
+          </div>
+
+          {/* ★ 직접 확인하기 */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <a className="btn btn-primary btn-sm" href={kakao} target="_blank" rel="noreferrer">
+              카카오맵에서 리뷰 확인 ↗
+            </a>
+            <a className="btn btn-green btn-sm" href={naver} target="_blank" rel="noreferrer">
+              네이버에서 확인 ↗
+            </a>
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--sub)", lineHeight: 1.7, marginBottom: 12 }}>
+            👆 링크를 열어 리뷰를 직접 보세요. 리뷰가 자연스러우면 [공개], 조작 같으면 [숨기기].
+          </p>
+
+          {/* 판단 */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {p.status === "live" ? (
+              <button className="btn btn-sm" style={{ background: "var(--warn-soft)", color: "var(--warn)" }} onClick={() => onStatus(p, "blocked")}>
+                숨기기 (고객에게 안 보임)
+              </button>
+            ) : (
+              <button className="btn btn-primary btn-sm" onClick={() => onStatus(p, "live")}>
+                공개하기 (문제 없음)
+              </button>
+            )}
+            <button className="btn btn-sm" style={{ background: "none", color: "var(--danger)", marginLeft: "auto" }} onClick={() => onRemove(p)}>
+              완전 삭제
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
