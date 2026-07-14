@@ -27,6 +27,10 @@ export default function Home() {
   const [dbError, setDbError] = useState("");
   const [sort, setSort] = useState("reco");
   const [search, setSearch] = useState("");
+  const [regionQuery, setRegionQuery] = useState("");
+  const [reqMsg, setReqMsg] = useState("");
+  const [toast, setToast] = useState("");
+
   async function reload() {
     if (!hasSupabase) {
       setRows(SAMPLE_RESTAURANTS);
@@ -34,7 +38,13 @@ export default function Home() {
       return;
     }
     const [r, s] = await Promise.all([
-      supabase.from("restaurants").select("*").order("kakao_rating", { ascending: false }),
+      supabase
+        .from("restaurants")
+        .select(
+          "id,region,name,theme,category,kakao_rating,kakao_reviews,taste_pct,mood_pct,revisit_pct,naver_reviews,highlight,lat,lng,kakao_url,naver_url,hidden"
+        )
+        .eq("hidden", false)
+        .order("kakao_rating", { ascending: false }),
       supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
     ]);
     if (r.error) {
@@ -44,7 +54,7 @@ export default function Home() {
       return;
     }
     setDbError("");
-    const clean = (r.data || []).filter((x) => !x.hidden && x.name);
+    const clean = (r.data || []).filter((x) => x.name);
     setRows(clean.length ? clean : SAMPLE_RESTAURANTS);
     if (s.data) {
       setF({
@@ -63,6 +73,26 @@ export default function Home() {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 공유 링크(?region=...&type=...)로 들어오면 그 상태로 복원
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    const rg = q.get("region");
+    const tp = q.get("type");
+    if (rg) setRegion(decodeURIComponent(rg));
+    if (tp === "food" || tp === "mood") setType(tp);
+  }, []);
+
+  // 필터 상태를 주소창에 반영 (공유 가능하게)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams();
+    if (region !== "전체") q.set("region", region);
+    if (type !== "전체") q.set("type", type);
+    const qs = q.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [region, type]);
 
   // 선택한 지역/테마가 목록에서 사라지면 '전체'로 자동 복구
   useEffect(() => {
@@ -122,6 +152,46 @@ export default function Home() {
   const naverCount = scoped.filter((r) => tier(r) === "naver").length;
   const kakaoCount = scoped.filter((r) => tier(r) === "kakao").length;
 
+  // 동네 검색: 있으면 이동, 없으면 요청 접수 (어드민이 수집)
+  async function searchRegion() {
+    const q = regionQuery.trim();
+    if (q.length < 2) return;
+    const hit = regions.find((r) => r !== "전체" && r.includes(q));
+    if (hit) {
+      setRegion(hit);
+      setReqMsg("");
+      setRegionQuery("");
+      return;
+    }
+    if (!hasSupabase) return setReqMsg("아직 준비되지 않은 동네예요.");
+    try {
+      const { data: exist } = await supabase.from("region_requests").select("id,count").eq("region", q).maybeSingle();
+      if (exist) {
+        await supabase.from("region_requests").update({ count: (exist.count || 1) + 1 }).eq("id", exist.id);
+      } else {
+        await supabase.from("region_requests").insert({ region: q });
+      }
+      setReqMsg(`'${q}'은(는) 아직 준비 중이에요. 요청이 접수됐어요 — 곧 추가할게요!`);
+    } catch {
+      setReqMsg("요청 접수에 실패했어요. 잠시 후 다시 시도해주세요.");
+    }
+    setRegionQuery("");
+  }
+
+  function share(text, url) {
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: SITE_NAME, text, url }).catch(() => {});
+    } else {
+      navigator.clipboard?.writeText(url);
+      setToast("링크를 복사했어요");
+      setTimeout(() => setToast(""), 2000);
+    }
+  }
+
+  const shareRegion = () => {
+    const url = typeof window !== "undefined" ? window.location.href : "";
+    share(`${region === "전체" ? "우리 동네" : region} 검증 맛집 ${passCount}곳`, url);
+  };
 
   return (
     <div>
@@ -186,12 +256,35 @@ export default function Home() {
           </p>
         )}
 
+        {reqMsg && (
+          <p style={{ fontSize: 12.5, color: "var(--brass)", background: "var(--stamp-soft)", padding: "10px 12px", borderRadius: 12, marginBottom: 16 }}>
+            {reqMsg}
+          </p>
+        )}
+
         <div>
           {/* ── 고객 컨트롤: 지역 / 유형 / 테마 ── */}
           <div
             className="card controls-card"
             style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", padding: "14px 18px", marginBottom: 20 }}
           >
+            <span style={{ display: "flex", gap: 6, flex: "1 1 220px", minWidth: 0 }}>
+              <input
+                value={regionQuery}
+                onChange={(e) => setRegionQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && searchRegion()}
+                placeholder="동네 검색 (예: 연남동)"
+                aria-label="동네 검색"
+                style={{ flex: 1, minWidth: 0, padding: "9px 12px", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13 }}
+              />
+              <button
+                onClick={searchRegion}
+                style={{ padding: "9px 14px", background: "var(--ink)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13, fontWeight: 600, flexShrink: 0 }}
+              >
+                찾기
+              </button>
+            </span>
+
             <select
               value={region}
               onChange={(e) => {
@@ -199,7 +292,7 @@ export default function Home() {
                 setTheme("전체");
               }}
               aria-label="지역 선택"
-              style={{ padding: "8px 12px", border: "1px solid var(--line)", borderRadius: 12, background: "#fff", fontSize: 13, fontWeight: 600 }}
+              style={{ padding: "9px 12px", border: "1px solid var(--line)", borderRadius: 12, background: "#fff", fontSize: 13, fontWeight: 600 }}
             >
               {regions.map((r) => (
                 <option key={r}>{r}</option>
@@ -268,8 +361,14 @@ export default function Home() {
                 {region} 맛집
               </h2>
               <span style={{ fontSize: 12.5, color: "var(--sub)" }}>
-                {loading ? "불러오는 중…" : `검증 ${passCount}곳 / 후보 ${scoped.length}곳`}
+                {loading ? "불러오는 중…" : `검증 ${passCount}곳`}
               </span>
+              <button
+                onClick={shareRegion}
+                style={{ marginLeft: "auto", background: "none", border: 0, color: "var(--stamp)", fontSize: 12.5, fontWeight: 600 }}
+              >
+                공유하기 ↗
+              </button>
             </div>
 
             <div className="list-controls">
@@ -303,24 +402,48 @@ export default function Home() {
             {!loading && visible.length === 0 && (
               <div className="card" style={{ textAlign: "center", padding: "48px 20px" }}>
                 <p style={{ color: "var(--sub)", fontSize: 14, marginBottom: 14 }}>
-                  {search.trim() ? `'${search.trim()}' 검색 결과가 없어요.` : "기준을 통과한 곳이 없어요."}
+                  {search.trim()
+                    ? `'${search.trim()}' 검색 결과가 없어요.`
+                    : "이 조건에 맞는 맛집이 아직 없어요."}
                 </p>
                 {search.trim() ? (
                   <button className="btn-ghost" onClick={() => setSearch("")}>검색 지우기</button>
                 ) : (
-                  <span style={{ fontSize: 12.5, color: "var(--sub)" }}>다른 지역이나 유형을 선택해 보세요.</span>
+                  <span style={{ fontSize: 12.5, color: "var(--sub)" }}>
+                    위에서 다른 동네를 검색하거나 유형을 바꿔보세요.
+                  </span>
                 )}
               </div>
             )}
 
             <div style={{ display: "grid", gap: 14 }}>
               {visible.map((r) => (
-                <RestaurantCard key={r.id} r={r} tier={tier(r)} food={qualifiesFood(r)} mood={qualifiesMood(r)} />
+                <RestaurantCard key={r.id} r={r} tier={tier(r)} food={qualifiesFood(r)} mood={qualifiesMood(r)} onShare={share} />
               ))}
             </div>
           </section>
         </div>
       </main>
+
+      {toast && (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "var(--ink)",
+            color: "#fff",
+            padding: "10px 18px",
+            borderRadius: 999,
+            fontSize: 13,
+            zIndex: 999,
+          }}
+        >
+          {toast}
+        </div>
+      )}
 
       <footer style={{ borderTop: "1px solid var(--line)", padding: "26px 0", textAlign: "center" }}>
         <p style={{ fontSize: 11.5, color: "var(--sub)" }}>
@@ -359,7 +482,7 @@ function TypeChips({ food, mood }) {
 // 안전한 숫자 포맷 (결측 방어)
 const num = (v, digits = 0) => (v == null || isNaN(Number(v)) ? null : Number(v).toFixed(digits));
 
-function RestaurantCard({ r, tier, food, mood }) {
+function RestaurantCard({ r, tier, food, mood, onShare }) {
   const hl = cleanHighlight(r.highlight);
   // 대표 태그: 맛 vs 분위기 중 높은 쪽
   const tasteP = Number(r.taste_pct ?? 0);
@@ -455,6 +578,20 @@ function RestaurantCard({ r, tier, food, mood }) {
             지도에서 보기
           </button>
         )}
+        <button
+          className="btn-ghost"
+          onClick={() =>
+            onShare(
+              `${r.name} — ${cleanHighlight(r.highlight) || "검증된 맛집"}`,
+              typeof window !== "undefined"
+                ? `${window.location.origin}?region=${encodeURIComponent(r.region)}`
+                : ""
+            )
+          }
+          aria-label={`${r.name} 공유`}
+        >
+          공유
+        </button>
         <a
           className="btn-ghost"
           style={{ background: "#e7f8ee", color: "#059142" }}

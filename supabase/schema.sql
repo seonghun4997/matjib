@@ -44,6 +44,20 @@ create table if not exists settings (
 
 insert into settings (id) values (1) on conflict (id) do nothing;
 
+-- 고객이 요청한 동네 (어드민이 일괄 수집)
+create table if not exists region_requests (
+  id uuid primary key default gen_random_uuid(),
+  region text not null,
+  count integer default 1,           -- 몇 명이 요청했는지
+  status text default 'pending',     -- pending | done
+  created_at timestamptz default now(),
+  unique (region)
+);
+alter table region_requests enable row level security;
+create policy "public read reqs" on region_requests for select using (true);
+create policy "public insert reqs" on region_requests for insert with check (true);
+create policy "public update reqs" on region_requests for update using (true);
+
 -- 방문자 크롤링 작업 기록 (쿨다운/동시실행/일일상한 판정용)
 create table if not exists crawl_jobs (
   id uuid primary key default gen_random_uuid(),

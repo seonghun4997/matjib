@@ -297,6 +297,7 @@ function makeHighlight(d, texts, foodOk, moodOk) {
 // ─────────────────────────────────────────────
 function CrawlSection({ pass, f, onDone }) {
   const [region, setRegion] = useState("");
+  const [requests, setRequests] = useState([]);
   const stopRef = useRef(false);
   const [queue, setQueue] = useState(null); // { total, done, current }
   const [collectType, setCollectType] = useState("both");
@@ -311,6 +312,19 @@ function CrawlSection({ pass, f, onDone }) {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
+
+  // 고객이 요청한 동네 불러오기
+  useEffect(() => {
+    if (!hasSupabase) return;
+    (async () => {
+      const { data } = await supabase
+        .from("region_requests")
+        .select("id,region,count")
+        .eq("status", "pending")
+        .order("count", { ascending: false });
+      setRequests(data || []);
+    })();
+  }, [running]);
 
   // 수집 중 새로고침/닫기 경고 (저장은 가게 단위라 잃는 건 이후 분량뿐)
   useEffect(() => {
@@ -361,6 +375,11 @@ function CrawlSection({ pass, f, onDone }) {
       if (regions.length > 1) log(`\n===== [${qi + 1}/${regions.length}] ${regions[qi]} =====`);
       const saved = await runOne(regions[qi]);
       grandTotal += saved;
+      // 고객 요청 동네였다면 완료 처리
+      const req = requests.find((x) => x.region === regions[qi] || regions[qi].includes(x.region));
+      if (req && saved > 0) {
+        await supabase.from("region_requests").update({ status: "done" }).eq("id", req.id);
+      }
       onDone && onDone();
     }
 
@@ -507,6 +526,26 @@ function CrawlSection({ pass, f, onDone }) {
         여러 동네를 줄바꿈으로 입력하면 자동으로 순차 수집해요. 가게마다 즉시 저장되니 [중단]하거나 창을 닫아도
         그때까지 저장된 건 모두 반영됩니다. 맛·분위기 기준을 둘 다 넘는 가게는 두 유형 모두로 표시돼요.
       </p>
+
+      {requests.length > 0 && (
+        <div style={{ background: "var(--stamp-soft)", borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--brass)" }}>
+              🙋 고객이 요청한 동네 {requests.length}곳
+            </span>
+            <button
+              onClick={() => setRegion(requests.map((r) => r.region).join("\n"))}
+              disabled={running}
+              style={{ padding: "7px 13px", background: "var(--stamp)", color: "#fff", border: 0, borderRadius: 10, fontSize: 12, fontWeight: 600 }}
+            >
+              전부 아래에 넣기
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: "var(--body)", marginTop: 6 }}>
+            {requests.map((r) => `${r.region}${r.count > 1 ? ` (${r.count}명)` : ""}`).join(" · ")}
+          </p>
+        </div>
+      )}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 12 }}>
         <div style={{ flex: 1, minWidth: 220 }}>
