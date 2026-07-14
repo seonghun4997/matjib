@@ -118,7 +118,7 @@ export default function Admin() {
         {num("min_kakao_reviews", 5, "카카오 리뷰 수 (이상)", "개")}
         {num("min_taste_pct", 5, "맛 태그 비율 (이상)", "% — 음식맛집 기준")}
         {num("min_mood_pct", 5, "분위기 태그 비율 (이상)", "% — 분위기맛집 기준")}
-        {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 최근 20개 중 4개 = 20%. '네이버까지 검증' 배지 기준")}
+        {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 최근 20개 중 4개 = 20%. '무조건 맛집 보장' 배지 기준")}
         <button
           onClick={saveDefaults}
           style={{ padding: "9px 18px", background: "var(--stamp)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5 }}
@@ -490,7 +490,7 @@ function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
     if (error) return alert(`저장 실패: ${error.message}`);
     setPending(pending.filter((x) => x.id !== r.id));
     setSavedMsg(
-      `${r.name}: 재방문 ${cnt}개 (${pct}%) 저장 — ${pct >= minRevisit ? "'네이버까지 검증' 배지가 붙어요 ✓" : "기준 미달이라 '카카오 검증'으로 유지돼요"}`
+      `${r.name}: 재방문 ${cnt}개 (${pct}%) 저장 — ${pct >= minRevisit ? "'무조건 맛집 보장' 배지가 붙어요 ✓" : "기준 미달이라 '맛집일 확률 높음'으로 유지돼요"}`
     );
     onDone && onDone();
   }
@@ -508,7 +508,7 @@ function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
       <ol style={{ fontSize: 12, color: "var(--sub)", lineHeight: 1.9, margin: "0 0 14px 18px" }}>
         <li>[네이버 리뷰 열기]를 눌러 가게를 찾고, 리뷰 탭 → <b>최신순</b>으로 바꿔요</li>
         <li>최근 리뷰 <b>20개</b>에서 &ldquo;<b>N번째 방문</b>&rdquo; 표시가 붙은 리뷰 개수를 세요</li>
-        <li>개수 입력 → 저장 — 기준({minRevisit}% = 20개 중 {Math.ceil(minRevisit / 5)}개) 이상이면 홈에 &lsquo;네이버까지 검증&rsquo; 배지가 자동으로 붙어요</li>
+        <li>개수 입력 → 저장 — 기준({minRevisit}% = 20개 중 {Math.ceil(minRevisit / 5)}개) 이상이면 홈에 &lsquo;무조건 맛집 보장&rsquo; 배지가 자동으로 붙어요</li>
       </ol>
       {savedMsg && <p style={{ fontSize: 12.5, color: "var(--stamp)", marginBottom: 10 }}>{savedMsg}</p>}
       {pending.length > 0 && (

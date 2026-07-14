@@ -142,7 +142,7 @@ export default function Home() {
         <p style={{ fontSize: 13, color: "var(--body)", marginBottom: 20, lineHeight: 1.6 }}>
           카카오맵 평점·리뷰와 네이버 재방문 데이터를 교차 검증해요.{" "}
           <span style={{ color: "var(--sub)" }}>
-            현재 {regions.length - 1}개 동네 · 카카오 검증 {loading ? "…" : kakaoCount}곳 · 네이버까지 검증{" "}
+            현재 {regions.length - 1}개 동네 · 맛집일 확률 높음 {loading ? "…" : kakaoCount}곳 · 무조건 맛집 보장{" "}
             {loading ? "…" : naverCount}곳
           </span>
         </p>
@@ -382,13 +382,13 @@ function RestaurantCard({ r, tier, food, mood }) {
           style={tier === "naver" ? { background: "var(--stamp)", color: "#fff" } : undefined}
           title={
             tier === "naver"
-              ? "카카오 + 네이버 재방문까지 전 항목 통과"
+              ? "카카오 데이터 + 네이버 재방문 검증까지 전 항목 통과"
               : tier === "kakao"
-              ? "카카오 기준 통과 (네이버 재방문 미측정)"
+              ? "카카오 데이터 기준 통과 (재방문 검증 전)"
               : "기준 미달"
           }
         >
-          {tier === "naver" ? "네이버까지 검증" : tier === "kakao" ? "카카오 검증" : "미달"}
+          {tier === "naver" ? "무조건 맛집 보장" : tier === "kakao" ? "맛집일 확률 높음" : "미달"}
         </span>
       </div>
 
