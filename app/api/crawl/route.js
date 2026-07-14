@@ -67,7 +67,7 @@ export async function POST(req) {
 
   try {
     if (body.mode === "start") return await startJob(body.region, isAdmin);
-    if (body.mode === "finish") return await finishJob(body.jobId);
+    if (body.mode === "finish") return await finishJob(body.jobId, body.saved);
 
     // 가게 단위 조회 — 관리자이거나, 유효한 작업(jobId) 소속이어야 함
     if (body.mode === "kakao_debug") {
@@ -118,8 +118,15 @@ async function startJob(region, isAdmin) {
     const list = jobs || [];
     if (list.some((j) => j.status === "running" && j.created_at > staleCut))
       return Response.json({ blocked: "지금 다른 동네를 수집하고 있어요. 1~2분 뒤에 다시 눌러주세요." });
-    if (list.some((j) => j.region === region && j.status === "done"))
-      return Response.json({ blocked: `'${region}'은(는) 최근 3일 안에 이미 수집된 동네예요. 위 지역 목록에서 골라보세요.` });
+    if (list.some((j) => j.region === region && j.status === "done")) {
+      const { count } = await sb
+        .from("restaurants")
+        .select("id", { count: "exact", head: true })
+        .eq("region", region);
+      if ((count || 0) > 0)
+        return Response.json({ blocked: `'${region}'은(는) 최근 3일 안에 이미 수집된 동네예요. 위 지역 목록에서 골라보세요.` });
+      // 기록만 있고 데이터가 없으면 (과거 실패) 재수집 허용
+    }
     if (list.filter((j) => j.created_at > since24h).length >= DAILY_LIMIT)
       return Response.json({ blocked: "오늘 수집 한도(10건)에 도달했어요. 내일 다시 시도해주세요." });
   }
@@ -138,10 +145,13 @@ async function startJob(region, isAdmin) {
   return Response.json({ jobId: job.id, candidates });
 }
 
-async function finishJob(jobId) {
+async function finishJob(jobId, saved) {
   const sb = db();
   if (sb && jobId)
-    await sb.from("crawl_jobs").update({ status: "done", finished_at: new Date().toISOString() }).eq("id", jobId);
+    await sb
+      .from("crawl_jobs")
+      .update({ status: Number(saved) > 0 ? "done" : "failed", finished_at: new Date().toISOString() })
+      .eq("id", jobId);
   return Response.json({ ok: true });
 }
 

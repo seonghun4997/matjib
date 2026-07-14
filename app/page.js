@@ -525,6 +525,7 @@ function NewRegionCrawl({ onDone }) {
     setRunning(true);
     setLogs([]);
     let jobId = null;
+    let savedCount = 0;
 
     try {
       log(`'${region}' 수집 준비 중…`);
@@ -596,6 +597,7 @@ function NewRegionCrawl({ onDone }) {
       if (finals.length) {
         const { error } = await supabase.from("restaurants").upsert(finals, { onConflict: "region,name" });
         if (error) throw new Error(`저장 실패: ${error.message}`);
+        savedCount = finals.length;
         log(`✓ 완료 — ${finals.length}곳이 추가됐어요. 왼쪽 기준으로 걸러서 보여드릴게요.`);
         onDone && onDone(region);
       } else {
@@ -606,7 +608,7 @@ function NewRegionCrawl({ onDone }) {
     } finally {
       if (jobId) {
         try {
-          await api({ mode: "finish", jobId });
+          await api({ mode: "finish", jobId, saved: savedCount });
         } catch {}
       }
     }
