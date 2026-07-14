@@ -80,7 +80,7 @@ export async function POST(req) {
     }
     if (body.mode === "kakao_search") {
       if (!isAdmin) return Response.json({ error: "권한이 없습니다." }, { status: 401 });
-      return Response.json(await kakaoSearch(body.query, body.limit || 30));
+      return Response.json(await kakaoSearch(body.query, body.limit || 500));
     }
     if (body.mode === "kakao_place") {
       if (!isAdmin && !(await jobAllows(body.jobId, "id", body.id)))
@@ -199,7 +199,7 @@ async function naverDebug(query, lat, lng) {
 async function kakaoSearch(query, limit) {
   const out = [];
   const seen = new Set();
-  const maxPages = Math.min(12, Math.ceil(limit / 10) + 1);
+  const maxPages = Math.min(34, Math.ceil(limit / 10) + 1); // 결과가 빌 때까지 끝까지
   for (let page = 1; page <= maxPages && out.length < limit; page++) {
     const url = `${ENDPOINTS.kakaoSearch}?q=${encodeURIComponent(query)}&msFlag=A&sort=0&page=${page}`;
     const r = await fetch(url, { headers: KAKAO_HEADERS });

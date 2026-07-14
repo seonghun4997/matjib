@@ -21,7 +21,10 @@ export default function Admin() {
     (async () => {
       const [s, r] = await Promise.all([
         supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
-        supabase.from("restaurants").select("id,name,region,theme,crawled_at").order("crawled_at", { ascending: false }),
+        supabase
+          .from("restaurants")
+          .select("id,name,region,theme,taste_pct,mood_pct,revisit_pct,crawled_at")
+          .order("crawled_at", { ascending: false }),
       ]);
       if (s.data)
         setF({
@@ -39,7 +42,7 @@ export default function Admin() {
   async function saveDefaults() {
     if (!hasSupabase) return setMsg("Supabase 연결 후 사용 가능합니다.");
     const { error } = await supabase.from("settings").upsert({ id: 1, ...f });
-    setMsg(error ? `저장 실패: ${error.message}` : "기본값이 저장되었습니다. 방문자 화면에 바로 적용됩니다.");
+    setMsg(error ? `저장 실패: ${error.message}` : "저장 완료 — 수집과 홈 화면에 동일하게 적용됩니다.");
   }
 
   async function remove(id) {
@@ -91,7 +94,7 @@ export default function Admin() {
   );
 
   return (
-    <div className="wrap" style={{ padding: "40px 20px 80px", maxWidth: 760 }}>
+    <div className="wrap" style={{ padding: "40px 20px 80px", maxWidth: 780 }}>
       <Link href="/" style={{ fontSize: 12.5, color: "var(--sub)", textDecoration: "none" }}>
         ← 홈으로
       </Link>
@@ -99,36 +102,39 @@ export default function Admin() {
         관리자
       </h1>
 
-      <CrawlSection pass={pw} onDone={() => setRefresh((x) => x + 1)} />
-
-      <NaverStatus refresh={refresh} />
-
+      {/* ── ① 검수 기준 (수집·노출 공통) ── */}
       <section className="card" style={{ marginBottom: 24 }}>
-        <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 14 }}>
-          검수 기준 기본값
+        <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
+          ① 검수 기준 <span style={{ fontSize: 12, fontWeight: 400, color: "var(--sub)" }}>— 수집과 홈 노출에 똑같이 적용</span>
         </h2>
+        <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
+          여기 저장한 값이 유일한 기준이에요. 수집할 때도, 홈에서 보여줄 때도 이 값으로 판단합니다.
+        </p>
         {num("min_kakao_rating", 0.1, "카카오 평점 (이상)", "점")}
         {num("min_kakao_reviews", 5, "카카오 리뷰 수 (이상)", "개")}
-        {num("min_naver_reviews", 20, "네이버 리뷰 수 (이상)", "개")}
         {num("min_taste_pct", 5, "맛 태그 비율 (이상)", "% — 음식맛집 기준")}
         {num("min_mood_pct", 5, "분위기 태그 비율 (이상)", "% — 분위기맛집 기준")}
-        {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 20% = 리뷰 5개당 1명")}
+        {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 최근 20개 중 4개 = 20%. '네이버까지 검증' 배지 기준")}
         <button
           onClick={saveDefaults}
           style={{ padding: "9px 18px", background: "var(--stamp)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5 }}
         >
-          기본값 저장
+          기준 저장
         </button>
         {msg && <p style={{ fontSize: 12.5, color: "var(--stamp)", marginTop: 10 }}>{msg}</p>}
       </section>
 
+      {/* ── ② 수집 ── */}
+      <CrawlSection pass={pw} f={f} onDone={() => setRefresh((x) => x + 1)} />
+
+      {/* ── ③ 네이버 수기 검증 ── */}
+      <NaverVerifyPanel refresh={refresh} minRevisit={f.min_revisit_pct} onDone={() => setRefresh((x) => x + 1)} />
+
+      {/* ── ④ 수집된 가게 ── */}
       <section className="card">
         <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 6 }}>
-          수집된 가게 ({rows.length})
+          ④ 수집된 가게 ({rows.length})
         </h2>
-        <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
-          위 크롤링 섹션에서 지역을 추가하면 여기에 쌓입니다.
-        </p>
         {!hasSupabase && <p style={{ fontSize: 13, color: "var(--sub)" }}>Supabase 연결 후 표시됩니다.</p>}
         {rows.map((r) => (
           <div
@@ -136,10 +142,11 @@ export default function Admin() {
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}
           >
             <span>
-              {r.name}{" "}
+              {Number(r.taste_pct ?? 0) >= Number(r.mood_pct ?? 0) ? "🍜" : "✨"} {r.name}{" "}
               <span style={{ color: "var(--sub)", fontSize: 12 }}>
                 · {r.region}
                 {r.theme ? ` · ${r.theme}` : ""}
+                {r.revisit_pct != null ? ` · 재방문 ${r.revisit_pct}%` : " · 네이버 미검증"}
               </span>
             </span>
             <button onClick={() => remove(r.id)} style={{ background: "none", border: 0, color: "var(--stamp)", fontSize: 12.5 }}>
@@ -149,48 +156,6 @@ export default function Admin() {
         ))}
       </section>
     </div>
-  );
-}
-
-// ─────────────────────────────────────────────
-// 네이버 검증 현황 — 미검증 수 + 실행 안내
-// ─────────────────────────────────────────────
-function NaverStatus({ refresh }) {
-  const [pending, setPending] = useState(null);
-  const [total, setTotal] = useState(null);
-
-  useEffect(() => {
-    if (!hasSupabase) return;
-    (async () => {
-      const [p, t] = await Promise.all([
-        supabase.from("restaurants").select("id", { count: "exact", head: true }).is("revisit_pct", null),
-        supabase.from("restaurants").select("id", { count: "exact", head: true }),
-      ]);
-      setPending(p.count ?? 0);
-      setTotal(t.count ?? 0);
-    })();
-  }, [refresh]);
-
-  return (
-    <section className="card" style={{ marginBottom: 24 }}>
-      <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 6 }}>
-        네이버 검증 (2단계)
-      </h2>
-      <p style={{ fontSize: 13, marginBottom: 10 }}>
-        {pending == null ? "확인 중…" : (
-          <>
-            전체 {total}곳 중{" "}
-            <b style={{ color: pending > 0 ? "var(--stamp)" : "inherit" }}>미검증 {pending}곳</b>
-            {pending === 0 && " — 모두 검증 완료 🎉"}
-          </>
-        )}
-      </p>
-      <p style={{ fontSize: 12, color: "var(--sub)", lineHeight: 1.8 }}>
-        네이버는 서버 접근을 막고 있어 이 단계만 내 컴퓨터에서 실행해요:
-        <br />① crawler 폴더의 <b>네이버검증.bat</b> 더블클릭 (또는 cmd에서 python naver_backfill.py)
-        <br />② 끝나면 이 페이지 새로고침 — 재방문 비율이 채워지고 홈에 &lsquo;네이버까지 검증&rsquo; 배지가 켜져요
-      </p>
-    </section>
   );
 }
 
@@ -220,19 +185,14 @@ function makeHighlight(d, texts, taste) {
 }
 
 // ─────────────────────────────────────────────
-// 웹 크롤링 섹션 — 파이썬 없이 사이트 안에서 수집
+// ② 수집 — 카카오 전용, 동 전체를 끝까지 검수
 // ─────────────────────────────────────────────
-function CrawlSection({ pass, onDone }) {
+function CrawlSection({ pass, f, onDone }) {
   const [region, setRegion] = useState("");
-  const [limit, setLimit] = useState(20);
-  const [minRating, setMinRating] = useState(3.5);
-  const [minReviews, setMinReviews] = useState(30);
-  const [minTaste, setMinTaste] = useState(25);
-  const [minMood, setMinMood] = useState(25);
-  const [recentN, setRecentN] = useState(30);
+  const [collectType, setCollectType] = useState("both"); // both | food | mood
+  const [skipExisting, setSkipExisting] = useState(true);
   const [keywords, setKeywords] = useState(TASTE_KEYWORDS.join(", "));
   const [showKw, setShowKw] = useState(false);
-  const [skipExisting, setSkipExisting] = useState(true);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [prog, setProg] = useState(null);
@@ -257,27 +217,29 @@ function CrawlSection({ pass, onDone }) {
   }
 
   async function run() {
-    if (!region.trim()) return alert("지역을 입력하세요. 예: 서울 마포구 연남동");
+    if (!region.trim()) return alert("지역을 입력하세요. 예: 서울 성북구 성북동");
     if (!hasSupabase) return alert("Supabase 연결 후 사용 가능합니다.");
     setRunning(true);
     setLogs([]);
     setProg(null);
     const kw = keywords.split(",").map((s) => s.trim()).filter(Boolean);
     let savedCount = 0;
-    let naverBlocked = false;
 
-    // 이미 수집된 가게 목록 (중복 수집 방지)
     let existing = new Set();
     if (skipExisting) {
       const { data } = await supabase.from("restaurants").select("name").eq("region", region.trim());
       existing = new Set((data || []).map((x) => x.name));
-      if (existing.size) log(`이 동네에 이미 ${existing.size}곳이 있어요 — 새 가게만 수집합니다.`);
+      if (existing.size) log(`이 동네에 이미 ${existing.size}곳이 있어요 — 새 가게만 검수합니다.`);
     }
 
     try {
-      log(`[카카오] '${region} 맛집' 검색 중…`);
-      const { candidates } = await api({ mode: "kakao_search", query: `${region} 맛집`, limit: Number(limit) });
-      log(`후보 ${candidates.length}곳 발견 (즐겨찾기순 정렬)`);
+      log(`[카카오] '${region} 맛집' — 검색 결과 끝까지 수집합니다…`);
+      const { candidates } = await api({ mode: "kakao_search", query: `${region} 맛집` });
+      log(
+        `후보 ${candidates.length}곳 발견 · 기준: ★${f.min_kakao_rating} / 리뷰 ${f.min_kakao_reviews} / 맛 ${f.min_taste_pct}% / 분위기 ${f.min_mood_pct}% · 유형: ${
+          collectType === "both" ? "음식+분위기" : collectType === "food" ? "음식맛집만" : "분위기맛집만"
+        }`
+      );
       candidates.sort((a, b) => b.favorite - a.favorite);
 
       let i = 0;
@@ -290,7 +252,7 @@ function CrawlSection({ pass, onDone }) {
           continue;
         }
         if (consecFails >= 3) {
-          log("카카오 상세 조회가 연속 실패해서 중단했어요. 아래 [진단 실행]을 눌러 결과를 공유해주세요.");
+          log("카카오 조회가 연속 실패해서 중단했어요. [진단 실행] 결과를 공유해주세요.");
           break;
         }
         try {
@@ -300,44 +262,42 @@ function CrawlSection({ pass, onDone }) {
           const taste =
             d.taste_official != null ? d.taste_official : texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
           const mood = d.mood_official ?? 0;
-          const pass1 = d.rating >= minRating && d.reviews >= minReviews && (taste >= minTaste || mood >= minMood);
+
+          const foodOk = taste >= f.min_taste_pct;
+          const moodOk = mood >= f.min_mood_pct;
+          const typeOk = collectType === "both" ? foodOk || moodOk : collectType === "food" ? foodOk : moodOk;
+          const pass1 = d.rating >= f.min_kakao_rating && d.reviews >= f.min_kakao_reviews && typeOk;
           const kind = taste >= mood ? "음식" : "분위기";
-          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% · 분위기 ${mood}% ${pass1 ? `→ ${kind}맛집 통과` : "→ 제외"}`);
+          log(
+            `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% · 분위기 ${mood}% ${
+              pass1 ? `→ ${kind}맛집 저장` : "→ 제외"
+            }`
+          );
+          consecFails = 0;
           if (!pass1) {
-            await sleep(800);
+            await sleep(500);
             continue;
           }
 
-          let n = { found: false, captcha: naverBlocked };
-          if (!naverBlocked) {
-            await sleep(500);
-            try {
-              n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN), lat: c.lat, lng: c.lng });
-            } catch {}
-            if (n.captcha) naverBlocked = true;
-          }
-          log(n.found ? `   네이버: ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%` : `   네이버 ${n.captcha ? "차단(캡차)" : "미확인"} → 카카오 정보로 저장`);
-
-          consecFails = 0;
           const row = {
-            region,
+            region: region.trim(),
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
-            category: (n.found && n.category) || d.category || c.cate_leaf || "",
+            category: d.category || c.cate_leaf || "",
             kakao_rating: d.rating,
             kakao_reviews: d.reviews,
             taste_pct: taste,
             mood_pct: d.mood_official ?? null,
             highlight: makeHighlight(d, texts, taste) || null,
-            naver_rating: n.found ? n.naver_rating : null,
-            naver_reviews: n.found ? n.naver_reviews : null,
-            revisit_pct: n.found ? n.revisit_pct : null,
-            address: (n.found && n.address) || d.address_hint || "",
-            hours: (n.found && n.hours) || d.hours_hint || "",
-            lat: (n.found ? n.lat : null) ?? c.lat ?? null,
-            lng: (n.found ? n.lng : null) ?? c.lng ?? null,
+            naver_rating: null,
+            naver_reviews: null,
+            revisit_pct: null,
+            address: d.address_hint || "",
+            hours: d.hours_hint || "",
+            lat: c.lat ?? null,
+            lng: c.lng ?? null,
             kakao_url: d.kakao_url || "",
-            naver_url: n.found ? n.naver_url || "" : "",
+            naver_url: "",
           };
           const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
           if (error) {
@@ -351,109 +311,86 @@ function CrawlSection({ pass, onDone }) {
           consecFails++;
           log(`   ! ${c.name} 실패: ${e.message}`);
         }
-        await sleep(800);
+        await sleep(500);
       }
 
-      if (finals.length) {
-        const { error } = await supabase.from("restaurants").upsert(finals, { onConflict: "region,name" });
-        if (error) throw new Error(`저장 실패: ${error.message}`);
-        log(`✓ 완료 — ${finals.length}곳 저장. 사이트에 바로 반영됐어요.`);
-        onDone && onDone();
-      } else {
-        log("통과한 가게가 없어요. 맛 비율 기준을 낮춰서 다시 시도해보세요.");
-      }
+      log(savedCount ? `✓ 완료 — 새로 ${savedCount}곳 저장. 아래 ③에서 네이버 검증을 진행하세요.` : "새로 저장된 가게가 없어요. ①의 기준을 조정해보세요.");
+      onDone && onDone();
     } catch (e) {
       log(`! 중단: ${e.message}`);
-    }
-    setRunning(false);
-  }
-
-  async function diagnose() {
-    setRunning(true);
-    setLogs([]);
-    log("진단 중… (카카오 + 네이버 주소 상태 확인)");
-    try {
-      const j = await api({ mode: "kakao_debug", query: `${region || "서울 성북동"} 맛집` });
-      log("=== 카카오 진단 ===");
-      log(JSON.stringify({ search_status: j.search_status, place_id: j.place_id, detail: (j.detail_attempts || []).map((d) => `${d.tag}:${d.status ?? d.error}`) }, null, 2));
-    } catch (e) {
-      log(`카카오 진단 실패: ${e.message}`);
-    }
-    try {
-      const n = await api({ mode: "naver_debug", query: `성북동 쌍다리돼지불백` });
-      log("=== 네이버 진단 ===");
-      log(JSON.stringify(n, null, 2));
-      log("↑ 이 내용을 전부 복사해서 공유해주세요.");
-    } catch (e) {
-      log(`네이버 진단 실패: ${e.message}`);
     }
     setRunning(false);
     setProg(null);
   }
 
-  const inp = (v, set, w) => ({
-    value: v,
-    onChange: (e) => set(e.target.value),
-    style: { width: w, padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13.5 },
-  });
+  async function diagnose() {
+    setRunning(true);
+    setLogs([]);
+    log("진단 중… (카카오 검색 + 상세 주소 상태 확인)");
+    try {
+      const j = await api({ mode: "kakao_debug", query: `${region || "서울 성북동"} 맛집` });
+      log(JSON.stringify(j, null, 2));
+      log("↑ 이 내용을 전부 복사해서 공유해주세요.");
+    } catch (e) {
+      log(`진단 실패: ${e.message}`);
+    }
+    setRunning(false);
+  }
 
   return (
     <section className="card" style={{ marginBottom: 24 }}>
       <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
-        크롤링 (사이트에서 바로 수집)
+        ② 수집 <span style={{ fontSize: 12, fontWeight: 400, color: "var(--sub)" }}>— 카카오맵에서 동 전체 검수</span>
       </h2>
       <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
-        지역 입력 후 시작 — 가게마다 즉시 저장돼서 중간에 멈춰도 그때까지는 남아요. 한 동을 전부 훑으려면 후보 수를 100~150으로 올리고, 이어서 돌릴 땐 "이미 수집된 가게 건너뛰기"가 중복을 막아줘요.
+        검색 결과를 끝까지 검수해요 (놓치는 가게 없음). 가게마다 즉시 저장되니 중간에 멈춰도 그때까지는 남아요.
       </p>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 12 }}>
-        <div>
+        <div style={{ flex: 1, minWidth: 200 }}>
           <div className="field-label">지역</div>
-          <input placeholder="예: 서울 마포구 연남동" {...inp(region, setRegion, 220)} disabled={running} />
+          <input
+            placeholder="예: 서울 성북구 성북동"
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            disabled={running}
+            style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13.5 }}
+          />
         </div>
         <div>
-          <div className="field-label">후보 수</div>
-          <input type="number" min={5} max={150} {...inp(limit, setLimit, 74)} disabled={running} />
-        </div>
-        <div>
-          <div className="field-label">평점 ≥</div>
-          <input type="number" step={0.1} {...inp(minRating, setMinRating, 74)} disabled={running} />
-        </div>
-        <div>
-          <div className="field-label">리뷰 ≥</div>
-          <input type="number" step={5} {...inp(minReviews, setMinReviews, 74)} disabled={running} />
-        </div>
-        <div>
-          <div className="field-label">맛 % ≥</div>
-          <input type="number" step={5} {...inp(minTaste, setMinTaste, 64)} disabled={running} />
-        </div>
-        <div>
-          <div className="field-label">분위기 % ≥</div>
-          <input type="number" step={5} {...inp(minMood, setMinMood, 64)} disabled={running} />
-        </div>
-        <div>
-          <div className="field-label">최근 리뷰 수</div>
-          <input type="number" step={5} {...inp(recentN, setRecentN, 74)} disabled={running} />
+          <div className="field-label">수집 유형</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {[
+              ["both", "둘 다"],
+              ["food", "🍜 음식만"],
+              ["mood", "✨ 분위기만"],
+            ].map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setCollectType(v)}
+                disabled={running}
+                style={{
+                  padding: "8px 11px",
+                  borderRadius: 10,
+                  border: 0,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: collectType === v ? "var(--stamp)" : "var(--paper)",
+                  color: collectType === v ? "#fff" : "var(--body)",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <button
           onClick={run}
           disabled={running}
-          style={{
-            padding: "9px 20px",
-            background: running ? "var(--sub)" : "var(--stamp)",
-            color: "#fff",
-            border: 0,
-            borderRadius: 12,
-            fontSize: 13.5,
-            fontWeight: 600,
-          }}
+          style={{ padding: "9px 20px", background: running ? "var(--sub)" : "var(--stamp)", color: "#fff", border: 0, borderRadius: 12, fontSize: 13.5, fontWeight: 600 }}
         >
-          {running ? "수집 중…" : "크롤링 시작"}
+          {running ? "수집 중…" : "수집 시작"}
         </button>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, paddingBottom: 9 }}>
-          <input type="checkbox" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} disabled={running} style={{ accentColor: "var(--stamp)" }} />
-          이미 수집된 가게 건너뛰기
-        </label>
         <button
           onClick={diagnose}
           disabled={running}
@@ -463,12 +400,15 @@ function CrawlSection({ pass, onDone }) {
         </button>
       </div>
 
-      <button
-        onClick={() => setShowKw(!showKw)}
-        style={{ background: "none", border: 0, color: "var(--sub)", fontSize: 12, padding: 0, marginBottom: 8 }}
-      >
-        {showKw ? "▾ 맛 키워드 접기" : "▸ 맛 키워드 편집 (쉼표로 구분)"}
-      </button>
+      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+          <input type="checkbox" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} disabled={running} style={{ accentColor: "var(--stamp)" }} />
+          이미 수집된 가게 건너뛰기
+        </label>
+        <button onClick={() => setShowKw(!showKw)} style={{ background: "none", border: 0, color: "var(--sub)", fontSize: 12, padding: 0 }}>
+          {showKw ? "▾ 맛 키워드 접기" : "▸ 맛 키워드 편집"}
+        </button>
+      </div>
       {showKw && (
         <textarea
           value={keywords}
@@ -493,20 +433,98 @@ function CrawlSection({ pass, onDone }) {
       {logs.length > 0 && (
         <div
           ref={logRef}
-          style={{
-            background: "var(--paper)",
-            borderRadius: 12,
-            padding: "12px 14px",
-            fontSize: 12,
-            lineHeight: 1.8,
-            maxHeight: 260,
-            overflowY: "auto",
-            whiteSpace: "pre-wrap",
-          }}
+          style={{ background: "var(--paper)", borderRadius: 12, padding: "12px 14px", fontSize: 12, lineHeight: 1.8, maxHeight: 260, overflowY: "auto", whiteSpace: "pre-wrap" }}
         >
           {logs.join("\n")}
         </div>
       )}
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ③ 네이버 수기 검증 — 알바생용
+// 링크 열기 → 리뷰 최신순 → 최근 20개 중 "N번째 방문" 개수 세기 → 입력 → 저장
+// ─────────────────────────────────────────────
+function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
+  const [pending, setPending] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [savedMsg, setSavedMsg] = useState("");
+
+  useEffect(() => {
+    if (!hasSupabase) return;
+    (async () => {
+      const { data } = await supabase
+        .from("restaurants")
+        .select("id,name,region,naver_url")
+        .is("revisit_pct", null)
+        .order("crawled_at", { ascending: false })
+        .limit(200);
+      setPending(data || []);
+    })();
+  }, [refresh]);
+
+  async function save(r) {
+    const raw = counts[r.id];
+    if (raw === undefined || raw === "") return alert("재방문 개수를 입력하세요 (0~20)");
+    const cnt = Math.max(0, Math.min(20, Number(raw)));
+    const pct = cnt * 5; // 20개 기준 → %
+    const { error } = await supabase.from("restaurants").update({ revisit_pct: pct }).eq("id", r.id);
+    if (error) return alert(`저장 실패: ${error.message}`);
+    setPending(pending.filter((x) => x.id !== r.id));
+    setSavedMsg(
+      `${r.name}: 재방문 ${cnt}개 (${pct}%) 저장 — ${pct >= minRevisit ? "'네이버까지 검증' 배지가 붙어요 ✓" : "기준 미달이라 '카카오 검증'으로 유지돼요"}`
+    );
+    onDone && onDone();
+  }
+
+  const naverLink = (r) =>
+    r.naver_url || `https://map.naver.com/p/search/${encodeURIComponent(`${(r.region || "").split(" ").pop()} ${r.name}`)}`;
+
+  return (
+    <section className="card" style={{ marginBottom: 24 }}>
+      <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
+        ③ 네이버 검증 <span style={{ fontSize: 12, fontWeight: 400, color: "var(--sub)" }}>— 수기 확인, 대기 {pending.length}곳</span>
+      </h2>
+      <ol style={{ fontSize: 12, color: "var(--sub)", lineHeight: 1.9, margin: "0 0 14px 18px" }}>
+        <li>[네이버 리뷰 열기]를 눌러 가게를 찾고, 리뷰 탭 → <b>최신순</b>으로 바꿔요</li>
+        <li>최근 리뷰 <b>20개</b>를 보면서 &ldquo;<b>N번째 방문</b>&rdquo; 표시가 붙은 리뷰 개수를 세요</li>
+        <li>개수를 입력하고 저장 — 기준({minRevisit}% = 20개 중 {Math.ceil(minRevisit / 5)}개) 이상이면 홈에 &lsquo;네이버까지 검증&rsquo; 배지가 자동으로 붙어요</li>
+      </ol>
+      {savedMsg && <p style={{ fontSize: 12.5, color: "var(--stamp)", marginBottom: 10 }}>{savedMsg}</p>}
+      {pending.length === 0 && <p style={{ fontSize: 13, color: "var(--sub)" }}>검증 대기 중인 가게가 없어요 🎉</p>}
+      {pending.map((r) => (
+        <div
+          key={r.id}
+          style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}
+        >
+          <span style={{ flex: 1, minWidth: 160 }}>
+            {r.name} <span style={{ color: "var(--sub)", fontSize: 12 }}>· {r.region}</span>
+          </span>
+          <a href={naverLink(r)} target="_blank" rel="noreferrer" className="btn-ghost" style={{ fontSize: 12, padding: "7px 12px" }}>
+            네이버 리뷰 열기 ↗
+          </a>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+            재방문
+            <input
+              type="number"
+              min={0}
+              max={20}
+              value={counts[r.id] ?? ""}
+              onChange={(e) => setCounts({ ...counts, [r.id]: e.target.value })}
+              style={{ width: 54, padding: "6px 8px", border: "1px solid var(--line)", borderRadius: 10, fontSize: 13, textAlign: "center" }}
+              aria-label={`${r.name} 재방문 개수`}
+            />
+            /20
+          </span>
+          <button
+            onClick={() => save(r)}
+            style={{ padding: "7px 14px", background: "var(--stamp)", color: "#fff", border: 0, borderRadius: 10, fontSize: 12.5, fontWeight: 600 }}
+          >
+            저장
+          </button>
+        </div>
+      ))}
     </section>
   );
 }

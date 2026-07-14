@@ -80,11 +80,8 @@ export default function Home() {
     r.revisit_pct != null &&
     Number(r.revisit_pct) >= f.min_revisit_pct &&
     (r.naver_reviews == null || Number(r.naver_reviews) >= f.min_naver_reviews);
-  // 노출 기준: 카카오 통과 + (네이버 항목은 미측정이면 보류, 있으면 기준 적용)
-  const passes = (r) =>
-    kakaoPass(r) &&
-    (r.naver_reviews == null || Number(r.naver_reviews) >= f.min_naver_reviews) &&
-    (r.revisit_pct == null || Number(r.revisit_pct) >= f.min_revisit_pct);
+  // 노출 기준 = 카카오 검증(1단계). 재방문은 '네이버까지 검증' 배지 승격에만 사용
+  const passes = (r) => kakaoPass(r);
   const tier = (r) => (passes(r) ? (naverPass(r) ? "naver" : "kakao") : "fail");
 
   const inScope = (r) =>
