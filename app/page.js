@@ -540,10 +540,16 @@ function NewRegionCrawl({ onDone }) {
 
       const finals = [];
       let i = 0;
+      let consecFails = 0;
       for (const c of candidates) {
         i++;
+        if (consecFails >= 3) {
+          log("카카오 상세 조회가 연속 실패해서 중단했어요. 관리자 페이지의 [진단]을 실행해 결과를 공유해주세요.");
+          break;
+        }
         try {
           const d = await api({ mode: "kakao_place", jobId, id: c.id, sample: 50 });
+          consecFails = 0;
           if (d.rating < 3.0 || d.reviews < 10) {
             log(`(${i}/${candidates.length}) ${c.name} — 정보 부족, 건너뜀`);
             await sleep(800);
@@ -566,7 +572,7 @@ function NewRegionCrawl({ onDone }) {
             region,
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
-            category: n.category || d.category || "",
+            category: n.category || d.category || c.cate_leaf || "",
             kakao_rating: d.rating,
             kakao_reviews: d.reviews,
             taste_pct: taste,
@@ -581,6 +587,7 @@ function NewRegionCrawl({ onDone }) {
             naver_url: n.naver_url || "",
           });
         } catch (e) {
+          consecFails++;
           log(`(${i}/${candidates.length}) ${c.name} — 실패: ${e.message}`);
         }
         await sleep(800);

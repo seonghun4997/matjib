@@ -192,10 +192,16 @@ function CrawlSection({ pass, onDone }) {
       candidates.sort((a, b) => b.favorite - a.favorite);
 
       let i = 0;
+      let consecFails = 0;
       for (const c of candidates) {
         i++;
+        if (consecFails >= 3) {
+          log("카카오 상세 조회가 연속 실패해서 중단했어요. 아래 [진단 실행]을 눌러 결과를 공유해주세요.");
+          break;
+        }
         try {
           const d = await api({ mode: "kakao_place", id: c.id, sample: 50 });
+          consecFails = 0;
           const texts = d.texts || [];
           const hit = texts.filter((t) => kw.some((k) => t.includes(k))).length;
           const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
@@ -219,7 +225,7 @@ function CrawlSection({ pass, onDone }) {
             region,
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
-            category: n.category || d.category || "",
+            category: n.category || d.category || c.cate_leaf || "",
             kakao_rating: d.rating,
             kakao_reviews: d.reviews,
             taste_pct: taste,
@@ -234,6 +240,7 @@ function CrawlSection({ pass, onDone }) {
             naver_url: n.naver_url || "",
           });
         } catch (e) {
+          consecFails++;
           log(`   ! ${c.name} 실패: ${e.message}`);
         }
         await sleep(800);
@@ -249,6 +256,20 @@ function CrawlSection({ pass, onDone }) {
       }
     } catch (e) {
       log(`! 중단: ${e.message}`);
+    }
+    setRunning(false);
+  }
+
+  async function diagnose() {
+    setRunning(true);
+    setLogs([]);
+    log("진단 중… (카카오 검색 1회 + 상세 주소 3종 상태 확인)");
+    try {
+      const j = await api({ mode: "kakao_debug", query: `${region || "서울 성북동"} 맛집` });
+      log(JSON.stringify(j, null, 2));
+      log("↑ 이 내용을 전부 복사해서 공유해주세요.");
+    } catch (e) {
+      log(`진단 실패: ${e.message}`);
     }
     setRunning(false);
   }
@@ -308,6 +329,13 @@ function CrawlSection({ pass, onDone }) {
           }}
         >
           {running ? "수집 중…" : "크롤링 시작"}
+        </button>
+        <button
+          onClick={diagnose}
+          disabled={running}
+          style={{ padding: "9px 14px", background: "var(--paper)", color: "var(--body)", border: 0, borderRadius: 12, fontSize: 13 }}
+        >
+          진단 실행
         </button>
       </div>
 

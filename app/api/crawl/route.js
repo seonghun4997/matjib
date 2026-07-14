@@ -70,6 +70,10 @@ export async function POST(req) {
     if (body.mode === "finish") return await finishJob(body.jobId);
 
     // 가게 단위 조회 — 관리자이거나, 유효한 작업(jobId) 소속이어야 함
+    if (body.mode === "kakao_debug") {
+      if (!isAdmin) return Response.json({ error: "권한이 없습니다." }, { status: 401 });
+      return Response.json(await kakaoDebug(body.query || "서울 성북동 맛집"));
+    }
     if (body.mode === "kakao_search") {
       if (!isAdmin) return Response.json({ error: "권한이 없습니다." }, { status: 401 });
       return Response.json(await kakaoSearch(body.query, body.limit || 30));
@@ -170,10 +174,11 @@ async function kakaoSearch(query, limit) {
       const full = p.category || p.cate_name || "";
       const parts = full.split(">").map((s) => s.trim()).filter(Boolean);
       out.push({
-        id: String(p.confirmid || p.id || ""),
+        id: String(p.confirmid || p.cid || p.docid || p.id || ""),
         name: (p.name || "").trim(),
         favorite: Number(p.favorite_cnt || p.favorCnt || 0),
         theme: parts.length > 1 ? parts[1] : parts[0] || "",
+        cate_leaf: parts.length ? parts[parts.length - 1] : "",
       });
     }
     await sleep(400);
@@ -182,34 +187,129 @@ async function kakaoSearch(query, limit) {
 }
 
 // ── 카카오: 가게 1곳 상세 + 리뷰 텍스트 ──
-async function kakaoPlace(id, sample) {
-  const r = await fetch(ENDPOINTS.kakaoPlace(id), { headers: KAKAO_HEADERS });
-  if (!r.ok) throw new Error(`카카오 상세 실패 (${r.status})`);
-  const data = await r.json();
-  const basic = data.basicInfo || {};
-  const feed = basic.feedback || {};
-  const cat = typeof basic.category === "object" && basic.category ? basic.category : {};
+// 카카오가 내부 주소를 바꿔온 이력이 있어 예비 주소를 순서대로 시도합니다.
+const DETAIL_ATTEMPTS = (id) => [
+  { tag: "main/v", url: `https://place.map.kakao.com/main/v/${id}`, headers: KAKAO_HEADERS },
+  {
+    tag: "m/main/v",
+    url: `https://place.map.kakao.com/m/main/v/${id}`,
+    headers: { ...KAKAO_HEADERS, Referer: `https://place.map.kakao.com/${id}` },
+  },
+  {
+    tag: "panel3",
+    url: `https://place-api.map.kakao.com/places/panel3/${id}`,
+    headers: { ...KAKAO_HEADERS, pf: "web", Origin: "https://place.map.kakao.com", Referer: `https://place.map.kakao.com/${id}` },
+  },
+];
 
-  let texts = ((data.comment || {}).list || []).map((c) => c.contents || "").filter(Boolean);
-  for (let page = 2; page <= 4 && texts.length < sample; page++) {
-    await sleep(400);
-    const cr = await fetch(ENDPOINTS.kakaoComments(id, page), { headers: KAKAO_HEADERS });
-    if (!cr.ok) break;
-    const list = ((await cr.json()).comment || {}).list || [];
-    if (!list.length) break;
-    texts = texts.concat(list.map((c) => c.contents || "").filter(Boolean));
+// JSON 어디에 있든 평점/리뷰 덩어리를 찾아내는 탐색기
+function deepFind(obj, pred, depth = 0) {
+  if (!obj || typeof obj !== "object" || depth > 7) return null;
+  if (pred(obj)) return obj;
+  for (const v of Object.values(obj)) {
+    const found = deepFind(v, pred, depth + 1);
+    if (found) return found;
   }
+  return null;
+}
+function deepFindComments(obj, depth = 0) {
+  if (!obj || typeof obj !== "object" || depth > 7) return null;
+  if (Array.isArray(obj) && obj.length && obj.some((it) => it && typeof it === "object" && typeof (it.contents ?? it.content) === "string"))
+    return obj;
+  for (const v of Object.values(obj)) {
+    const found = deepFindComments(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+const num = (o, ...keys) => {
+  for (const k of keys) if (o && o[k] != null && !isNaN(Number(o[k]))) return Number(o[k]);
+  return 0;
+};
 
-  const scoreCnt = Number(feed.scorecnt || 0);
-  return {
-    rating: scoreCnt ? Math.round((Number(feed.scoresum || 0) / scoreCnt) * 100) / 100 : 0,
-    reviews: Number(feed.comntcnt || scoreCnt || 0),
-    favorite: Number(feed.favoriteCnt || 0),
-    category: cat.catename || "",
-    theme_fallback: cat.cate1name || "",
-    texts: texts.slice(0, sample),
-    kakao_url: `https://place.map.kakao.com/${id}`,
-  };
+async function kakaoPlace(id, sample) {
+  const fails = [];
+  for (const a of DETAIL_ATTEMPTS(id)) {
+    try {
+      const res = await fetch(a.url, { headers: a.headers });
+      if (!res.ok) {
+        fails.push(`${a.tag}:${res.status}`);
+        continue;
+      }
+      const data = await res.json().catch(() => null);
+      if (!data) {
+        fails.push(`${a.tag}:not-json`);
+        continue;
+      }
+      const feed = deepFind(
+        data,
+        (o) => ("scoresum" in o || "scoreSum" in o || "score_sum" in o) && ("scorecnt" in o || "scoreCnt" in o || "score_cnt" in o)
+      );
+      if (!feed) {
+        fails.push(`${a.tag}:no-score`);
+        continue;
+      }
+      const scoreSum = num(feed, "scoresum", "scoreSum", "score_sum");
+      const scoreCnt = num(feed, "scorecnt", "scoreCnt", "score_cnt");
+      const cat = deepFind(data, (o) => "catename" in o || "cateName" in o) || {};
+
+      let texts = (deepFindComments(data) || []).map((c) => c.contents ?? c.content ?? "").filter(Boolean);
+      for (let page = 2; page <= 4 && texts.length < sample; page++) {
+        await sleep(400);
+        try {
+          const cr = await fetch(ENDPOINTS.kakaoComments(id, page), { headers: KAKAO_HEADERS });
+          if (!cr.ok) break;
+          const list = deepFindComments(await cr.json()) || [];
+          if (!list.length) break;
+          texts = texts.concat(list.map((c) => c.contents ?? c.content ?? "").filter(Boolean));
+        } catch {
+          break;
+        }
+      }
+
+      return {
+        rating: scoreCnt ? Math.round((scoreSum / scoreCnt) * 100) / 100 : 0,
+        reviews: num(feed, "comntcnt", "comntCnt", "comment_cnt") || scoreCnt,
+        favorite: num(feed, "favoriteCnt", "favorite_cnt"),
+        category: cat.catename || cat.cateName || "",
+        theme_fallback: cat.cate1name || cat.cate1Name || "",
+        texts: texts.slice(0, sample),
+        kakao_url: `https://place.map.kakao.com/${id}`,
+        source: a.tag,
+      };
+    } catch (e) {
+      fails.push(`${a.tag}:${String(e?.message || e).slice(0, 40)}`);
+    }
+    await sleep(300);
+  }
+  throw new Error(`카카오 상세 실패 (${fails.join(" · ")})`);
+}
+
+// ── 진단: 검색 원본 + 상세 주소별 응답 상태를 그대로 반환 (관리자용) ──
+async function kakaoDebug(query) {
+  const url = `${ENDPOINTS.kakaoSearch}?q=${encodeURIComponent(query)}&msFlag=A&sort=0&page=1`;
+  const r = await fetch(url, { headers: KAKAO_HEADERS });
+  const out = { search_status: r.status };
+  if (!r.ok) return out;
+  const data = await r.json().catch(() => null);
+  const first = data?.place?.[0];
+  if (!first) return { ...out, note: "place 배열이 비어있음", top_keys: Object.keys(data || {}) };
+  out.first_place_fields = Object.fromEntries(
+    Object.entries(first).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 60) : v]).slice(0, 40)
+  );
+  const id = String(first.confirmid || first.cid || first.docid || first.id || "");
+  out.detail_attempts = [];
+  for (const a of DETAIL_ATTEMPTS(id)) {
+    try {
+      const res = await fetch(a.url, { headers: a.headers });
+      const body = await res.text();
+      out.detail_attempts.push({ tag: a.tag, status: res.status, body_head: body.slice(0, 200) });
+    } catch (e) {
+      out.detail_attempts.push({ tag: a.tag, error: String(e?.message || e).slice(0, 80) });
+    }
+    await sleep(300);
+  }
+  return out;
 }
 
 // ── 네이버: 업체명 검색 → 상세 + 재방문 비율 ──
