@@ -139,8 +139,8 @@ export default function MatjibMap({ places }) {
     <div>
       <div
         ref={boxRef}
+        className="map-box"
         style={{
-          height: 420,
           borderRadius: 20,
           border: "none",
           overflow: "hidden",

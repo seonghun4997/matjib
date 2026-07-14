@@ -181,7 +181,7 @@ export default function Home() {
         <div>
           {/* ── 고객 컨트롤: 지역 / 유형 / 테마 ── */}
           <div
-            className="card"
+            className="card controls-card"
             style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", padding: "14px 18px", marginBottom: 20 }}
           >
             <select
@@ -198,7 +198,7 @@ export default function Home() {
               ))}
             </select>
 
-            <div style={{ display: "flex", gap: 6 }} role="tablist" aria-label="맛집 유형">
+            <div className="chips-row" role="tablist" aria-label="맛집 유형">
               {[
                 ["전체", "전체"],
                 ["food", "🍜 음식맛집"],
@@ -225,7 +225,7 @@ export default function Home() {
             </div>
 
             {themes.length > 2 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }} role="tablist" aria-label="카카오 테마">
+              <div className="chips-row" role="tablist" aria-label="카카오 테마">
                 {themes.map((t) => (
                   <button
                     key={t}
@@ -352,7 +352,7 @@ function RestaurantCard({ r, tier, food, mood }) {
   const hl = cleanHighlight(r.highlight);
   return (
     <article className="card">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
             <span style={{ fontSize: 11.5, color: "var(--sub)" }}>{r.region}</span>
@@ -401,7 +401,7 @@ function RestaurantCard({ r, tier, food, mood }) {
         {r.revisit_pct != null && ` · 재방문 ${r.revisit_pct}%`}
       </p>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
+      <div className="card-actions" style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
         <a
           className="btn-primary"
           href={r.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(r.name)}`}

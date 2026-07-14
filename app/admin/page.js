@@ -14,6 +14,9 @@ export default function Admin() {
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [tab, setTab] = useState("crawl");
+  const [recalcing, setRecalcing] = useState(false);
+  const [recalcLog, setRecalcLog] = useState("");
 
   useEffect(() => {
     if (!ok || !hasSupabase) return;
@@ -22,7 +25,7 @@ export default function Admin() {
         supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
         supabase
           .from("restaurants")
-          .select("id,name,region,theme,taste_pct,mood_pct,revisit_pct,suspect_score,suspect_reasons,hidden,crawled_at")
+          .select("id,name,region,theme,taste_pct,mood_pct,revisit_pct,suspect_score,suspect_reasons,hidden,kakao_url,crawled_at")
           .order("crawled_at", { ascending: false }),
       ]);
       if (s.data)
@@ -48,6 +51,42 @@ export default function Admin() {
   async function toggleHidden(r) {
     await supabase.from("restaurants").update({ hidden: !r.hidden }).eq("id", r.id);
     setRows(rows.map((x) => (x.id === r.id ? { ...x, hidden: !r.hidden } : x)));
+  }
+
+  // 기존 가게 전체 의심도 재계산 (재수집 없이)
+  async function recalcSuspect() {
+    const targets = rows.filter((r) => r.kakao_url);
+    if (!targets.length) return alert("재계산할 가게가 없어요.");
+    if (!confirm(`${targets.length}곳의 의심도를 다시 계산할까요? (약 ${Math.ceil(targets.length * 1.2 / 60)}분)`)) return;
+    setRecalcing(true);
+    let done = 0;
+    let flagged = 0;
+    for (const r0 of targets) {
+      const id = (r0.kakao_url.match(/place\.map\.kakao\.com\/(\d+)/) || [])[1];
+      if (!id) continue;
+      try {
+        const res = await fetch("/api/crawl", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pass: pw, mode: "kakao_place", id, sample: 50 }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || res.status);
+        const score = d.suspect_score || 0;
+        const patch = { suspect_score: score, suspect_reasons: d.suspect_reasons || null };
+        if (score >= f.suspect_hide_score) patch.hidden = true; // 자동숨김만 적용, 수동 해제분은 건드리지 않음
+        await supabase.from("restaurants").update(patch).eq("id", r0.id);
+        done++;
+        if (score >= f.suspect_hide_score) flagged++;
+        setRecalcLog(`재계산 중 ${done}/${targets.length} · 자동숨김 ${flagged}곳 · 최근: ${r0.name} ${score}점`);
+      } catch (e) {
+        setRecalcLog(`${r0.name} 오류: ${e.message}`);
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    setRecalcLog(`✓ 완료 — ${done}곳 재계산, ${flagged}곳 자동숨김`);
+    setRefresh((x) => x + 1);
+    setRecalcing(false);
   }
 
   async function remove(id) {
@@ -103,11 +142,42 @@ export default function Admin() {
       <Link href="/" style={{ fontSize: 12.5, color: "var(--sub)", textDecoration: "none" }}>
         ← 홈으로
       </Link>
-      <h1 className="serif" style={{ fontSize: 22, fontWeight: 900, margin: "18px 0 24px" }}>
+      <h1 className="serif" style={{ fontSize: 22, fontWeight: 900, margin: "18px 0 16px" }}>
         관리자
       </h1>
 
-      {/* ── ① 검수 기준 (수집·노출 공통) ── */}
+      <div
+        style={{ position: "sticky", top: 0, zIndex: 10, background: "var(--paper)", display: "flex", gap: 6, padding: "8px 0 14px", flexWrap: "wrap" }}
+        role="tablist"
+        aria-label="관리자 메뉴"
+      >
+        {[
+          ["criteria", "① 기준"],
+          ["crawl", "② 수집"],
+          ["verify", `③ 네이버 검증${rows.filter((r) => r.revisit_pct == null).length ? ` (${rows.filter((r) => r.revisit_pct == null).length})` : ""}`],
+          ["manage", `④ 가게 관리 (${rows.length})`],
+        ].map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => setTab(v)}
+            role="tab"
+            aria-selected={tab === v}
+            style={{
+              padding: "9px 15px",
+              borderRadius: 999,
+              border: 0,
+              fontSize: 13,
+              fontWeight: 600,
+              background: tab === v ? "var(--stamp)" : "var(--card)",
+              color: tab === v ? "#fff" : "var(--body)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "criteria" && (
       <section className="card" style={{ marginBottom: 24 }}>
         <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
           ① 검수 기준 <span style={{ fontSize: 12, fontWeight: 400, color: "var(--sub)" }}>— 수집과 홈 노출에 똑같이 적용</span>
@@ -129,12 +199,15 @@ export default function Admin() {
         </button>
         {msg && <p style={{ fontSize: 12.5, color: "var(--stamp)", marginTop: 10 }}>{msg}</p>}
       </section>
+      )}
 
-      <CrawlSection pass={pw} f={f} onDone={() => setRefresh((x) => x + 1)} />
+      {tab === "crawl" && <CrawlSection pass={pw} f={f} onDone={() => setRefresh((x) => x + 1)} />}
 
-      <NaverVerifyPanel refresh={refresh} minRevisit={f.min_revisit_pct} onDone={() => setRefresh((x) => x + 1)} />
+      {tab === "verify" && (
+        <NaverVerifyPanel refresh={refresh} minRevisit={f.min_revisit_pct} onDone={() => setRefresh((x) => x + 1)} />
+      )}
 
-      {/* ── ④ 수집된 가게 ── */}
+      {tab === "manage" && (
       <section className="card">
         <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 6 }}>
           ④ 수집된 가게 ({rows.length})
@@ -143,6 +216,16 @@ export default function Admin() {
           의심도(0~100점)는 ① 특정 시기에 평균별점 4.9~5.0 리뷰어 집중 ② 맛/분위기 태그 비율 과다 — 두 기준으로 계산돼요.
           {f.suspect_hide_score}점 이상은 수집 때 자동 숨김되고, 배지에 마우스를 올리면 근거가 보여요. 오판이면 [표시]로 되살리세요.
         </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <button
+            onClick={recalcSuspect}
+            disabled={recalcing}
+            style={{ padding: "8px 14px", background: recalcing ? "var(--sub)" : "var(--ink)", color: "#fff", border: 0, borderRadius: 10, fontSize: 12.5, fontWeight: 600 }}
+          >
+            {recalcing ? "재계산 중…" : "⚠️ 의심도 전체 재계산"}
+          </button>
+          {recalcLog && <span style={{ fontSize: 12, color: "var(--sub)" }}>{recalcLog}</span>}
+        </div>
         {!hasSupabase && <p style={{ fontSize: 13, color: "var(--sub)" }}>Supabase 연결 후 표시됩니다.</p>}
         {rows.map((r) => (
           <div
@@ -186,6 +269,7 @@ export default function Admin() {
           </div>
         ))}
       </section>
+      )}
     </div>
   );
 }
