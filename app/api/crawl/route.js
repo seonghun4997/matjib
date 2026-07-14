@@ -294,6 +294,28 @@ function kakaoHours(data) {
   }
 }
 
+// 카카오 후기 강점 태그에서 '맛' 선택 인원 ÷ 후기 수 (%)
+function tasteFromStrength(kr) {
+  try {
+    const ks = kr?.score_set;
+    const total = Number(ks?.review_count || 0);
+    if (!total) return null;
+    const nameById = {};
+    for (const d of kr?.strength_description || []) if (d?.id != null) nameById[String(d.id)] = d?.name || "";
+    for (const c of ks?.strength_counts || []) {
+      if (!c || typeof c !== "object") continue;
+      const nm = c.name || nameById[String(c.id)] || "";
+      if (nm === "맛" || nm.startsWith("맛")) {
+        const cnt = Number(c.count ?? c.cnt ?? c.uv ?? c.value ?? 0);
+        return Math.round((cnt / total) * 1000) / 10;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function kakaoPlace(id, sample) {
   const fails = [];
 
@@ -322,6 +344,7 @@ async function kakaoPlace(id, sample) {
           category: cat.name4 || cat.name3 || cat.name || "",
           theme_fallback: cat.name2 || "",
           texts: texts.slice(0, sample),
+          taste_official: tasteFromStrength(data.kakaomap_review),
           address_hint: data.summary?.address?.road || data.summary?.address?.disp || "",
           hours_hint: kakaoHours(data),
           kakao_url: `https://place.map.kakao.com/${id}`,
@@ -515,9 +538,7 @@ async function naverPlace(name, region, recent, hintLat, hintLng) {
       }
       const sj = await sr.json().catch(() => null);
       if (sj?.result?.ncaptcha || sj?.result?.type === "ncaptcha") {
-        fails.push(`${a.tag}:captcha`);
-        await sleep(300);
-        continue;
+        return { found: false, captcha: true };
       }
       first = firstPlaceHit(sj);
       if (first) break;

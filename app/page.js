@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, hasSupabase } from "../lib/supabase";
 import MatjibMap from "./MatjibMap";
@@ -239,8 +239,8 @@ export default function Home() {
               editable unit="개"
             />
             <FilterRow
-              label="맛 관련 리뷰 비율"
-              value={`${f.min_taste_pct}% (${tastePctToRatio(f.min_taste_pct)}) 이상`}
+              label="맛 태그 비율 (후기 대비)"
+              value={`${f.min_taste_pct}% 이상`}
               min={0} max={100} step={5}
               v={f.min_taste_pct}
               onChange={set("min_taste_pct")}
@@ -446,7 +446,7 @@ function RestaurantCard({ r, pass }) {
       <div className="grid-fields">
         <Field label="카카오 평점" value={<span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.kakao_rating).toFixed(1)}</span>} />
         <Field label="카카오 리뷰" value={`${Number(r.kakao_reviews).toLocaleString()}개`} />
-        <Field label="맛 관련 리뷰 비율" value={`${r.taste_pct}% (${tastePctToRatio(Number(r.taste_pct))})`} />
+        <Field label="맛 태그 비율" value={r.taste_pct == null ? "—" : `${r.taste_pct}%`} />
         <Field label="재방문 비율" value={r.revisit_pct == null ? "미측정" : `${r.revisit_pct}%`} />
         <Field label="네이버 평점" value={r.naver_rating ? <span style={{ color: "var(--brass)", fontWeight: 700 }}>★ {Number(r.naver_rating).toFixed(2)}</span> : "—"} />
         <Field label="네이버 리뷰" value={r.naver_reviews ? `${Number(r.naver_reviews).toLocaleString()}개` : "—"} />
@@ -500,6 +500,12 @@ function NewRegionCrawl({ onDone }) {
   const [q, setQ] = useState("");
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [prog, setProg] = useState(null);
+  const logRef = useRef(null);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs]);
 
   const log = (t) => setLogs((l) => [...l.slice(-40), t]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -524,8 +530,10 @@ function NewRegionCrawl({ onDone }) {
     }
     setRunning(true);
     setLogs([]);
+    setProg(null);
     let jobId = null;
     let savedCount = 0;
+    let naverBlocked = false;
 
     try {
       log(`'${region}' 수집 준비 중…`);
@@ -539,11 +547,11 @@ function NewRegionCrawl({ onDone }) {
       const candidates = (start.candidates || []).sort((a, b) => b.favorite - a.favorite);
       log(`후보 ${candidates.length}곳 — 하나씩 검수할게요 (3~5분)`);
 
-      const finals = [];
       let i = 0;
       let consecFails = 0;
       for (const c of candidates) {
         i++;
+        setProg({ i, total: candidates.length, saved: savedCount });
         if (consecFails >= 3) {
           log("카카오 상세 조회가 연속 실패해서 중단했어요. 관리자 페이지의 [진단]을 실행해 결과를 공유해주세요.");
           break;
@@ -557,21 +565,29 @@ function NewRegionCrawl({ onDone }) {
           }
           const texts = d.texts || [];
           const hit = texts.filter((t) => TASTE_KEYWORDS.some((k) => t.includes(k))).length;
-          const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
+          const taste =
+            d.taste_official != null ? d.taste_official : texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
+          const tasteNote = d.taste_official != null ? "" : `(추정·표본 ${texts.length})`;
 
-          await sleep(800);
-          let n = { found: false };
-          try {
-            n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30, lat: c.lat, lng: c.lng });
-          } catch {}
+          let n = { found: false, captcha: naverBlocked };
+          if (!naverBlocked) {
+            await sleep(500);
+            try {
+              n = await api({ mode: "naver_place", jobId, name: c.name, region, recent: 30, lat: c.lat, lng: c.lng });
+            } catch {}
+            if (n.captcha) {
+              naverBlocked = true;
+              log("네이버가 서버 접근을 막고 있어 이후 가게는 카카오 정보로만 저장해요. (나중에 보강 가능)");
+            }
+          }
           log(
             n.found
-              ? `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%(표본 ${texts.length}) · 재방문 ${n.revisit_pct}% ✓`
-              : `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%(표본 ${texts.length}) · 네이버 ${n.captcha ? "차단" : "미확인"} → 카카오 정보로 저장 ✓`
+              ? `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%${tasteNote} · 재방문 ${n.revisit_pct}% ✓`
+              : `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 맛 ${taste}%${tasteNote} ✓ 저장`
           );
 
           consecFails = 0;
-          finals.push({
+          const row = {
             region,
             name: c.name,
             theme: c.theme || d.theme_fallback || "",
@@ -588,7 +604,15 @@ function NewRegionCrawl({ onDone }) {
             lng: (n.found ? n.lng : null) ?? c.lng ?? null,
             kakao_url: d.kakao_url || "",
             naver_url: n.found ? n.naver_url || "" : "",
-          });
+          };
+          const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
+          if (error) {
+            log(`   저장 실패: ${error.message}`);
+          } else {
+            savedCount++;
+            setProg({ i, total: candidates.length, saved: savedCount });
+            if (savedCount === 1 || savedCount % 3 === 0) onDone && onDone(region);
+          }
         } catch (e) {
           consecFails++;
           log(`(${i}/${candidates.length}) ${c.name} — 실패: ${e.message}`);
@@ -596,14 +620,11 @@ function NewRegionCrawl({ onDone }) {
         await sleep(800);
       }
 
-      if (finals.length) {
-        const { error } = await supabase.from("restaurants").upsert(finals, { onConflict: "region,name" });
-        if (error) throw new Error(`저장 실패: ${error.message}`);
-        savedCount = finals.length;
-        log(`✓ 완료 — ${finals.length}곳이 추가됐어요. 왼쪽 기준으로 걸러서 보여드릴게요.`);
+      if (savedCount) {
+        log(`✓ 완료 — ${savedCount}곳이 저장됐어요. 왼쪽 기준으로 걸러서 보여드릴게요.`);
         onDone && onDone(region);
       } else {
-        log("이 동네에서는 수집된 가게가 없어요.");
+        log("이 동네에서는 저장된 가게가 없어요. 기준을 낮춰 다시 시도해보세요.");
       }
     } catch (e) {
       log(`중단: ${e.message}`);
@@ -615,6 +636,7 @@ function NewRegionCrawl({ onDone }) {
       }
     }
     setRunning(false);
+    setProg(null);
   }
 
   return (
@@ -657,8 +679,20 @@ function NewRegionCrawl({ onDone }) {
       <p style={{ fontSize: 10.5, color: "var(--sub)", marginTop: 6 }}>
         같은 동네는 3일에 한 번, 하루 10개 동네까지 수집할 수 있어요. 수집 중엔 이 탭을 열어두세요.
       </p>
+      {prog && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--sub)", marginBottom: 4 }}>
+            <span>검수 {prog.i}/{prog.total}곳</span>
+            <span style={{ color: "var(--stamp)", fontWeight: 600 }}>저장 {prog.saved}곳</span>
+          </div>
+          <div style={{ height: 5, background: "var(--line)", borderRadius: 99 }}>
+            <div style={{ height: 5, width: `${Math.round((prog.i / prog.total) * 100)}%`, background: "var(--stamp)", borderRadius: 99, transition: "width 0.3s" }} />
+          </div>
+        </div>
+      )}
       {logs.length > 0 && (
         <div
+          ref={logRef}
           style={{
             background: "var(--paper)",
             borderRadius: 12,

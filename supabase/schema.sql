@@ -12,7 +12,7 @@ create table if not exists restaurants (
   kakao_theme text,                  -- 카카오맵 분류 테마 (한식/일식/카페 등)
   kakao_rating numeric,              -- 카카오 평점
   kakao_reviews integer,             -- 카카오 리뷰 수
-  taste_pct numeric,                 -- 맛 관련 리뷰 비율 % (80% = 4:1)
+  taste_pct numeric,                 -- 카카오 '맛' 태그 비율 % (후기 대비)
   naver_rating numeric,              -- 네이버 플레이스 평점
   naver_reviews integer,             -- 네이버 플레이스 리뷰 수
   revisit_pct numeric,               -- 최근 리뷰 중 재방문 비율 % (20% = 5:1)
@@ -31,7 +31,7 @@ create table if not exists settings (
   min_kakao_rating numeric default 3.5,
   min_kakao_reviews integer default 30,
   min_naver_reviews integer default 0,
-  min_taste_pct numeric default 80,
+  min_taste_pct numeric default 25,
   min_revisit_pct numeric default 20
 );
 

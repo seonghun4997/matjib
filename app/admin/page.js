@@ -107,7 +107,7 @@ export default function Admin() {
         {num("min_kakao_rating", 0.1, "카카오 평점 (이상)", "점")}
         {num("min_kakao_reviews", 5, "카카오 리뷰 수 (이상)", "개")}
         {num("min_naver_reviews", 20, "네이버 리뷰 수 (이상)", "개")}
-        {num("min_taste_pct", 5, "맛 관련 리뷰 비율 (이상)", "% — 80% = 4:1")}
+        {num("min_taste_pct", 5, "맛 태그 비율 (이상)", "% — 후기 100명 중 맛 25명 = 25%")}
         {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 20% = 리뷰 5개당 1명")}
         <button
           onClick={saveDefaults}
@@ -184,6 +184,7 @@ function CrawlSection({ pass, onDone }) {
     setLogs([]);
     const kw = keywords.split(",").map((s) => s.trim()).filter(Boolean);
     const finals = [];
+    let naverBlocked = false;
 
     try {
       log(`[카카오] '${region} 맛집' 검색 중…`);
@@ -203,7 +204,8 @@ function CrawlSection({ pass, onDone }) {
           const d = await api({ mode: "kakao_place", id: c.id, sample: 50 });
           const texts = d.texts || [];
           const hit = texts.filter((t) => kw.some((k) => t.includes(k))).length;
-          const taste = texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
+          const taste =
+            d.taste_official != null ? d.taste_official : texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
           const pass1 = d.rating >= minRating && d.reviews >= minReviews && taste >= minTaste;
           log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% ${pass1 ? "→ 통과" : "→ 제외"}`);
           if (!pass1) {
@@ -211,11 +213,14 @@ function CrawlSection({ pass, onDone }) {
             continue;
           }
 
-          await sleep(800);
-          let n = { found: false };
-          try {
-            n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN), lat: c.lat, lng: c.lng });
-          } catch {}
+          let n = { found: false, captcha: naverBlocked };
+          if (!naverBlocked) {
+            await sleep(500);
+            try {
+              n = await api({ mode: "naver_place", name: c.name, region, recent: Number(recentN), lat: c.lat, lng: c.lng });
+            } catch {}
+            if (n.captcha) naverBlocked = true;
+          }
           log(n.found ? `   네이버: ★${n.naver_rating ?? "?"} · 재방문 ${n.revisit_pct}%` : `   네이버 ${n.captcha ? "차단(캡차)" : "미확인"} → 카카오 정보로 저장`);
 
           consecFails = 0;
