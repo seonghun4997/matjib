@@ -241,16 +241,31 @@ async function kakaoPlace(id, sample) {
         fails.push(`${a.tag}:not-json`);
         continue;
       }
-      const feed = deepFind(
-        data,
-        (o) => ("scoresum" in o || "scoreSum" in o || "score_sum" in o) && ("scorecnt" in o || "scoreCnt" in o || "score_cnt" in o)
-      );
+      // 평점 칸 이름 후보들 (구형 → 신형 추정 순)
+      const PAIRS = [
+        { sum: ["scoresum", "scoreSum", "score_sum"], cnt: ["scorecnt", "scoreCnt", "score_cnt"], avg: [] },
+        { sum: ["starSum", "starsum"], cnt: ["starCnt", "starcnt"], avg: [] },
+        { sum: [], cnt: ["reviewCount", "reviewCnt", "starPointCnt", "scoreCount"], avg: ["averageReview", "avgStarPoint", "starPointAvg", "scoreAvg", "averageStarPoint", "avgReview"] },
+      ];
+      let feed = null, scoreSum = 0, scoreCnt = 0, avgDirect = 0;
+      for (const pr of PAIRS) {
+        feed = deepFind(data, (o) => {
+          const hasCnt = pr.cnt.some((k) => k in o);
+          const hasSum = pr.sum.some((k) => k in o);
+          const hasAvg = pr.avg.some((k) => k in o);
+          return hasCnt && (hasSum || hasAvg);
+        });
+        if (feed) {
+          scoreSum = num(feed, ...pr.sum);
+          scoreCnt = num(feed, ...pr.cnt);
+          avgDirect = num(feed, ...pr.avg);
+          break;
+        }
+      }
       if (!feed) {
         fails.push(`${a.tag}:no-score`);
         continue;
       }
-      const scoreSum = num(feed, "scoresum", "scoreSum", "score_sum");
-      const scoreCnt = num(feed, "scorecnt", "scoreCnt", "score_cnt");
       const cat = deepFind(data, (o) => "catename" in o || "cateName" in o) || {};
 
       let texts = (deepFindComments(data) || []).map((c) => c.contents ?? c.content ?? "").filter(Boolean);
@@ -268,7 +283,7 @@ async function kakaoPlace(id, sample) {
       }
 
       return {
-        rating: scoreCnt ? Math.round((scoreSum / scoreCnt) * 100) / 100 : 0,
+        rating: avgDirect ? Math.round(avgDirect * 100) / 100 : scoreCnt ? Math.round((scoreSum / scoreCnt) * 100) / 100 : 0,
         reviews: num(feed, "comntcnt", "comntCnt", "comment_cnt") || scoreCnt,
         favorite: num(feed, "favoriteCnt", "favorite_cnt"),
         category: cat.catename || cat.cateName || "",
@@ -285,6 +300,29 @@ async function kakaoPlace(id, sample) {
   throw new Error(`카카오 상세 실패 (${fails.join(" · ")})`);
 }
 
+// JSON 구조를 사람이 읽을 수 있는 키 지도로 요약
+function keyTree(o, depth = 0) {
+  if (depth > 3) return "…";
+  if (Array.isArray(o)) return o.length ? [keyTree(o[0], depth + 1)] : [];
+  if (o && typeof o === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(o).slice(0, 25)) out[k] = keyTree(v, depth + 1);
+    return out;
+  }
+  return typeof o === "string" ? "str" : typeof o;
+}
+// 평점/리뷰 냄새가 나는 키를 경로째 수집
+function scanKeys(o, path = "", out = [], depth = 0) {
+  if (!o || typeof o !== "object" || depth > 6 || out.length > 50) return out;
+  for (const [k, v] of Object.entries(o)) {
+    const p = `${path}.${k}`;
+    if (/score|star|review|comment|rating|grade|point/i.test(k))
+      out.push({ path: p, value: typeof v === "object" ? "(객체)" : String(v).slice(0, 50) });
+    scanKeys(v, p, out, depth + 1);
+  }
+  return out;
+}
+
 // ── 진단: 검색 원본 + 상세 주소별 응답 상태를 그대로 반환 (관리자용) ──
 async function kakaoDebug(query) {
   const url = `${ENDPOINTS.kakaoSearch}?q=${encodeURIComponent(query)}&msFlag=A&sort=0&page=1`;
@@ -298,14 +336,55 @@ async function kakaoDebug(query) {
     Object.entries(first).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 60) : v]).slice(0, 40)
   );
   const id = String(first.confirmid || first.cid || first.docid || first.id || "");
+  out.place_id = id;
   out.detail_attempts = [];
   for (const a of DETAIL_ATTEMPTS(id)) {
     try {
       const res = await fetch(a.url, { headers: a.headers });
       const body = await res.text();
-      out.detail_attempts.push({ tag: a.tag, status: res.status, body_head: body.slice(0, 200) });
+      const entry = { tag: a.tag, status: res.status };
+      try {
+        const json = JSON.parse(body);
+        entry.key_tree = keyTree(json);
+        entry.score_like_keys = scanKeys(json);
+      } catch {
+        entry.body_head = body.slice(0, 300);
+      }
+      out.detail_attempts.push(entry);
     } catch (e) {
       out.detail_attempts.push({ tag: a.tag, error: String(e?.message || e).slice(0, 80) });
+    }
+    await sleep(300);
+  }
+
+  // 리뷰 텍스트가 있을 법한 주소 후보들도 상태 확인
+  const REVIEW_GUESSES = [
+    { tag: "commentlist", url: `https://place.map.kakao.com/commentlist/v/${id}/1`, headers: KAKAO_HEADERS },
+    {
+      tag: "tab/reviews",
+      url: `https://place-api.map.kakao.com/places/tab/reviews/${id}`,
+      headers: { ...KAKAO_HEADERS, pf: "web", Origin: "https://place.map.kakao.com", Referer: `https://place.map.kakao.com/${id}` },
+    },
+    {
+      tag: "panel3/reviews",
+      url: `https://place-api.map.kakao.com/places/panel3/${id}/reviews`,
+      headers: { ...KAKAO_HEADERS, pf: "web", Origin: "https://place.map.kakao.com", Referer: `https://place.map.kakao.com/${id}` },
+    },
+  ];
+  out.review_attempts = [];
+  for (const a of REVIEW_GUESSES) {
+    try {
+      const res = await fetch(a.url, { headers: a.headers });
+      const body = await res.text();
+      const entry = { tag: a.tag, status: res.status };
+      try {
+        entry.key_tree = keyTree(JSON.parse(body));
+      } catch {
+        entry.body_head = body.slice(0, 200);
+      }
+      out.review_attempts.push(entry);
+    } catch (e) {
+      out.review_attempts.push({ tag: a.tag, error: String(e?.message || e).slice(0, 80) });
     }
     await sleep(300);
   }
