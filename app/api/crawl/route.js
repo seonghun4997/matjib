@@ -305,17 +305,47 @@ function strengthPct(kr, label) {
     const ks = kr?.score_set;
     const total = Number(ks?.review_count || 0);
     if (!total) return null;
+
+    // 태그 id ↔ 이름 매핑
     const nameById = {};
-    for (const d of kr?.strength_description || []) if (d?.id != null) nameById[String(d.id)] = d?.name || "";
-    for (const c of ks?.strength_counts || []) {
-      if (!c || typeof c !== "object") continue;
-      const nm = c.name || nameById[String(c.id)] || "";
-      if (nm === label || nm.startsWith(label)) {
-        const cnt = Number(c.count ?? c.cnt ?? c.uv ?? c.value ?? 0);
-        return Math.round((cnt / total) * 1000) / 10;
+    for (const d of kr?.strength_description || []) {
+      if (d?.id != null) nameById[String(d.id)] = d?.name || d?.title || "";
+    }
+    const counts = ks?.strength_counts;
+    if (!counts) return null;
+
+    const match = (nm) => nm && (nm === label || nm.startsWith(label) || nm.includes(label));
+    let cnt = null;
+
+    if (Array.isArray(counts)) {
+      for (const c of counts) {
+        // 형태 A: [{id, name, count}]
+        if (c && typeof c === "object") {
+          const nm = c.name || c.title || nameById[String(c.id ?? c.strength_id)] || "";
+          if (match(nm)) {
+            cnt = Number(c.count ?? c.cnt ?? c.uv ?? c.value ?? c.review_count ?? 0);
+            break;
+          }
+        }
+      }
+      // 형태 B: [31, 26, 25] — description 순서와 1:1 대응
+      if (cnt == null && counts.every((c) => typeof c === "number")) {
+        const list = kr?.strength_description || [];
+        const idx = list.findIndex((d) => match(d?.name || d?.title || ""));
+        if (idx >= 0 && counts[idx] != null) cnt = Number(counts[idx]);
+      }
+    } else if (typeof counts === "object") {
+      // 형태 C: {"맛": 31, "분위기": 26} 또는 {"1": 31}
+      for (const [k, v] of Object.entries(counts)) {
+        const nm = match(k) ? k : nameById[k] || "";
+        if (match(nm)) {
+          cnt = Number(v);
+          break;
+        }
       }
     }
-    return null;
+    if (cnt == null || isNaN(cnt)) return null;
+    return Math.round((cnt / total) * 1000) / 10;
   } catch {
     return null;
   }
@@ -396,6 +426,18 @@ function suspicion(data, rating, reviews, tastePct, moodPct) {
         reasons.push(`최근 리뷰 ${dates.length}개 중 ${best}개가 2주 안에 집중 등록`);
       }
     }
+    // A-3. 리뷰 별점이 5점에 몰림 (owner 정보가 없을 때의 대체 신호)
+    const stars = (data?.kakaomap_review?.reviews || [])
+      .map((rv) => Number(rv?.star_rating ?? rv?.starRating ?? 0))
+      .filter((s) => s > 0);
+    if (stars.length >= 8) {
+      const fives = stars.filter((s) => s >= 5).length;
+      if (fives / stars.length >= 0.95) {
+        score += 20;
+        reasons.push(`최근 리뷰 ${stars.length}개가 거의 전부 5점 (${fives}개)`);
+      }
+    }
+
     // B. 태그 비율 과다
     const top = Math.max(Number(tastePct ?? 0), Number(moodPct ?? 0));
     const tag = Number(tastePct ?? 0) >= Number(moodPct ?? 0) ? "맛" : "분위기";
@@ -544,6 +586,40 @@ async function kakaoDebug(query) {
   );
   const id = String(first.confirmid || first.cid || first.docid || first.id || "");
   out.place_id = id;
+
+  // 의심도 계산에 쓰이는 원재료를 그대로 덤프 (문제 진단용)
+  try {
+    const pr = await fetch(ENDPOINTS.kakaoPlace(id).replace("place.map.kakao.com/main/v", "place-api.map.kakao.com/places/panel3"), {
+      headers: { ...KAKAO_HEADERS, pf: "web", Origin: "https://place.map.kakao.com", Referer: `https://place.map.kakao.com/${id}` },
+    });
+    if (pr.ok) {
+      const pd = await pr.json();
+      const kr = pd?.kakaomap_review || {};
+      out.suspect_inputs = {
+        score_set_raw: kr.score_set || null,
+        strength_description: kr.strength_description || null,
+        review_sample: (kr.reviews || []).slice(0, 3).map((rv) => ({
+          registered_at: rv?.registered_at ?? null,
+          updated_at: rv?.updated_at ?? null,
+          star_rating: rv?.star_rating ?? null,
+          meta: rv?.meta ?? null,
+        })),
+        photo_owner_sample: (pd?.photos?.photos || [])
+          .slice(0, 5)
+          .map((ph) => ph?.kakaomap_review_photo_meta?.owner ?? null),
+        computed: suspicion(
+          pd,
+          Number(kr.score_set?.average_score || 0),
+          Number(kr.score_set?.review_count || 0),
+          strengthPct(kr, "맛"),
+          strengthPct(kr, "분위기")
+        ),
+      };
+    }
+  } catch (e) {
+    out.suspect_inputs = { error: String(e?.message || e).slice(0, 80) };
+  }
+
   out.detail_attempts = [];
   for (const a of DETAIL_ATTEMPTS(id)) {
     try {

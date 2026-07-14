@@ -201,7 +201,12 @@ export default function Admin() {
       </section>
       )}
 
-      {tab === "crawl" && <CrawlSection pass={pw} f={f} onDone={() => setRefresh((x) => x + 1)} />}
+      {tab === "crawl" && (
+        <>
+          <AutoSection pass={pw} />
+          <CrawlSection pass={pw} f={f} onDone={() => setRefresh((x) => x + 1)} />
+        </>
+      )}
 
       {tab === "verify" && (
         <NaverVerifyPanel refresh={refresh} minRevisit={f.min_revisit_pct} onDone={() => setRefresh((x) => x + 1)} />
