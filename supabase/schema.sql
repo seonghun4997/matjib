@@ -34,6 +34,7 @@ create table if not exists settings (
   min_kakao_reviews integer default 30,
   min_naver_reviews integer default 0,
   min_taste_pct numeric default 25,
+  min_mood_pct numeric default 25,
   min_revisit_pct numeric default 20
 );
 

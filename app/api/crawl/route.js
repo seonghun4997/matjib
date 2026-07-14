@@ -327,7 +327,7 @@ function topMenus(data) {
     const items = data?.menu?.menus?.items || [];
     const names = [];
     for (const it of items) {
-      const nm = it?.name || it?.menu_name || it?.title || "";
+      const nm = typeof it === "string" ? it : it?.name || it?.menu_name || it?.menuName || it?.item_name || it?.title || "";
       if (nm) names.push(String(nm).slice(0, 24));
       if (names.length >= 3) break;
     }

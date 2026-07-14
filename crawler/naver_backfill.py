@@ -44,6 +44,10 @@ def main():
                 {"name": r["name"], "region": r["region"], "lat": r.get("lat"), "lng": r.get("lng")},
                 cfg.get("naver_recent_reviews", 30),
             )
+        except naver_crawler.NaverCaptcha:
+            print("\n! 네이버가 보안문자(캡차)를 요구했어요 — 지금 IP가 잠시 차단된 상태입니다.")
+            print("  1~2시간 뒤나 다른 네트워크(폰 테더링 등)에서 다시 실행해주세요.")
+            break
         except Exception as ex:
             print(f"  ! {r['name']} 오류: {ex}")
             continue

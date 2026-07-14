@@ -29,6 +29,7 @@ export default function Admin() {
           min_kakao_reviews: Number(s.data.min_kakao_reviews),
           min_naver_reviews: Number(s.data.min_naver_reviews ?? 0),
           min_taste_pct: Number(s.data.min_taste_pct),
+          min_mood_pct: Number(s.data.min_mood_pct ?? 25),
           min_revisit_pct: Number(s.data.min_revisit_pct),
         });
       setRows(r.data || []);
@@ -100,6 +101,8 @@ export default function Admin() {
 
       <CrawlSection pass={pw} onDone={() => setRefresh((x) => x + 1)} />
 
+      <NaverStatus refresh={refresh} />
+
       <section className="card" style={{ marginBottom: 24 }}>
         <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 14 }}>
           검수 기준 기본값
@@ -107,7 +110,8 @@ export default function Admin() {
         {num("min_kakao_rating", 0.1, "카카오 평점 (이상)", "점")}
         {num("min_kakao_reviews", 5, "카카오 리뷰 수 (이상)", "개")}
         {num("min_naver_reviews", 20, "네이버 리뷰 수 (이상)", "개")}
-        {num("min_taste_pct", 5, "맛 태그 비율 (이상)", "% — 후기 100명 중 맛 25명 = 25%")}
+        {num("min_taste_pct", 5, "맛 태그 비율 (이상)", "% — 음식맛집 기준")}
+        {num("min_mood_pct", 5, "분위기 태그 비율 (이상)", "% — 분위기맛집 기준")}
         {num("min_revisit_pct", 5, "재방문 비율 (이상)", "% — 20% = 리뷰 5개당 1명")}
         <button
           onClick={saveDefaults}
@@ -148,6 +152,48 @@ export default function Admin() {
   );
 }
 
+// ─────────────────────────────────────────────
+// 네이버 검증 현황 — 미검증 수 + 실행 안내
+// ─────────────────────────────────────────────
+function NaverStatus({ refresh }) {
+  const [pending, setPending] = useState(null);
+  const [total, setTotal] = useState(null);
+
+  useEffect(() => {
+    if (!hasSupabase) return;
+    (async () => {
+      const [p, t] = await Promise.all([
+        supabase.from("restaurants").select("id", { count: "exact", head: true }).is("revisit_pct", null),
+        supabase.from("restaurants").select("id", { count: "exact", head: true }),
+      ]);
+      setPending(p.count ?? 0);
+      setTotal(t.count ?? 0);
+    })();
+  }, [refresh]);
+
+  return (
+    <section className="card" style={{ marginBottom: 24 }}>
+      <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 6 }}>
+        네이버 검증 (2단계)
+      </h2>
+      <p style={{ fontSize: 13, marginBottom: 10 }}>
+        {pending == null ? "확인 중…" : (
+          <>
+            전체 {total}곳 중{" "}
+            <b style={{ color: pending > 0 ? "var(--stamp)" : "inherit" }}>미검증 {pending}곳</b>
+            {pending === 0 && " — 모두 검증 완료 🎉"}
+          </>
+        )}
+      </p>
+      <p style={{ fontSize: 12, color: "var(--sub)", lineHeight: 1.8 }}>
+        네이버는 서버 접근을 막고 있어 이 단계만 내 컴퓨터에서 실행해요:
+        <br />① crawler 폴더의 <b>네이버검증.bat</b> 더블클릭 (또는 cmd에서 python naver_backfill.py)
+        <br />② 끝나면 이 페이지 새로고침 — 재방문 비율이 채워지고 홈에 &lsquo;네이버까지 검증&rsquo; 배지가 켜져요
+      </p>
+    </section>
+  );
+}
+
 // 리뷰 텍스트에서 사전 키워드 상위 2개 추출
 function topHits(texts, dict) {
   const cnt = {};
@@ -155,19 +201,22 @@ function topHits(texts, dict) {
   return Object.entries(cnt).sort((x, y) => y[1] - x[1]).slice(0, 2).map((e) => e[0]);
 }
 
-// 음식/분위기 유형에 따라 한 줄 설명 생성
+// 음식/분위기 유형에 따라 한 줄 설명 생성 (항상 최소 한 줄 보장)
 function makeHighlight(d, texts, taste) {
-  const isFood = (d.taste_official ?? taste ?? 0) >= (d.mood_official ?? 0);
-  if (isFood) {
-    const kws = topHits(texts, FOOD_HINTS);
-    const menu = (d.menus || [])[0];
-    const parts = [];
-    if (menu) parts.push(`대표메뉴 ${menu}`);
-    if (kws.length) parts.push(`후기에 ${kws.join("·")} 언급이 많아요`);
-    return parts.join(" — ");
-  }
-  const kws = topHits(texts, MOOD_HINTS);
-  return kws.length ? `${kws.join("·")} 좋다는 후기가 많아요` : "분위기 좋다는 평가가 많은 곳";
+  const tastePct = d.taste_official ?? taste ?? 0;
+  const moodPct = d.mood_official ?? 0;
+  const isFood = tastePct >= moodPct;
+  const pct = isFood ? tastePct : moodPct;
+  const tag = isFood ? "맛" : "분위기";
+  const cnt = d.reviews ? Math.round((d.reviews * pct) / 100) : 0;
+
+  const parts = [];
+  const menu = isFood ? (d.menus || [])[0] : null;
+  if (menu) parts.push(`대표메뉴 ${menu}`);
+  parts.push(cnt ? `후기 ${d.reviews}명 중 ${cnt}명이 '${tag}'을 꼽았어요` : `'${tag}' 평가가 좋은 곳`);
+  const kws = topHits(texts, isFood ? FOOD_HINTS : MOOD_HINTS);
+  if (kws.length) parts.push(`${kws.join("·")} 언급`);
+  return parts.join(" · ");
 }
 
 // ─────────────────────────────────────────────
@@ -178,7 +227,8 @@ function CrawlSection({ pass, onDone }) {
   const [limit, setLimit] = useState(20);
   const [minRating, setMinRating] = useState(3.5);
   const [minReviews, setMinReviews] = useState(30);
-  const [minTaste, setMinTaste] = useState(60);
+  const [minTaste, setMinTaste] = useState(25);
+  const [minMood, setMinMood] = useState(25);
   const [recentN, setRecentN] = useState(30);
   const [keywords, setKeywords] = useState(TASTE_KEYWORDS.join(", "));
   const [showKw, setShowKw] = useState(false);
@@ -249,8 +299,10 @@ function CrawlSection({ pass, onDone }) {
           const hit = texts.filter((t) => kw.some((k) => t.includes(k))).length;
           const taste =
             d.taste_official != null ? d.taste_official : texts.length ? Math.round((hit / texts.length) * 1000) / 10 : 0;
-          const pass1 = d.rating >= minRating && d.reviews >= minReviews && taste >= minTaste;
-          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% ${pass1 ? "→ 통과" : "→ 제외"}`);
+          const mood = d.mood_official ?? 0;
+          const pass1 = d.rating >= minRating && d.reviews >= minReviews && (taste >= minTaste || mood >= minMood);
+          const kind = taste >= mood ? "음식" : "분위기";
+          log(`(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% · 분위기 ${mood}% ${pass1 ? `→ ${kind}맛집 통과` : "→ 제외"}`);
           if (!pass1) {
             await sleep(800);
             continue;
@@ -372,8 +424,12 @@ function CrawlSection({ pass, onDone }) {
           <input type="number" step={5} {...inp(minReviews, setMinReviews, 74)} disabled={running} />
         </div>
         <div>
-          <div className="field-label">맛 비율 % ≥</div>
-          <input type="number" step={5} {...inp(minTaste, setMinTaste, 74)} disabled={running} />
+          <div className="field-label">맛 % ≥</div>
+          <input type="number" step={5} {...inp(minTaste, setMinTaste, 64)} disabled={running} />
+        </div>
+        <div>
+          <div className="field-label">분위기 % ≥</div>
+          <input type="number" step={5} {...inp(minMood, setMinMood, 64)} disabled={running} />
         </div>
         <div>
           <div className="field-label">최근 리뷰 수</div>

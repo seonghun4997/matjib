@@ -39,14 +39,22 @@ query getVisitorReviews($input: VisitorReviewsInput) {
 DELAY = 1.5
 
 
-def find_place(name: str, region: str) -> dict | None:
+class NaverCaptcha(Exception):
+    """네이버가 보안문자(캡차)를 요구 — IP가 차단된 상태."""
+
+
+def find_place(name: str, region: str, lng=None, lat=None) -> dict | None:
     """업체명 검색 → 첫 번째 플레이스의 ID와 좌표(위경도)."""
-    params = {"query": f"{region.split()[-1]} {name}", "type": "all", "searchCoord": "", "boundary": ""}
+    coord = f"{lng};{lat}" if lng and lat else ""
+    params = {"query": f"{region.split()[-1]} {name}", "type": "all", "searchCoord": coord, "boundary": ""}
     r = requests.get(ENDPOINTS["search"], params=params, headers=HEADERS, timeout=10)
     if r.status_code != 200:
         return None
     try:
-        lst = r.json()["result"]["place"]["list"]
+        result = r.json().get("result") or {}
+        if result.get("ncaptcha") or result.get("type") == "ncaptcha":
+            raise NaverCaptcha()
+        lst = (result.get("place") or {}).get("list")
         if not lst:
             return None
         p = lst[0]
@@ -150,7 +158,7 @@ def fetch_revisit_pct(place_id: str, recent_n: int) -> tuple[float, int]:
 
 def enrich(row: dict, recent_n: int) -> dict:
     """카카오 단계 결과에 네이버 정보를 붙입니다."""
-    place = find_place(row["name"], row["region"])
+    place = find_place(row["name"], row["region"], row.get("lng"), row.get("lat"))
     time.sleep(DELAY)
     if not place:
         print(f"  ! [네이버] '{row['name']}' 검색 결과 없음 — 건너뜀")
