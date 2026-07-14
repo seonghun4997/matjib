@@ -94,6 +94,9 @@ export default function MatjibMap({ places }) {
       });
       const kakaoHref =
         p.kakao_url || `https://map.kakao.com/link/search/${encodeURIComponent(p.name)}`;
+      const naverHref =
+        p.naver_url ||
+        `https://map.naver.com/p/search/${encodeURIComponent(`${(p.region || "").split(" ").pop()} ${p.name}`)}`;
       const marker = L.marker([Number(p.lat), Number(p.lng)], { icon }).addTo(layer);
       markersRef.current.set(String(p.id), marker);
       marker.bindPopup(
@@ -107,6 +110,11 @@ export default function MatjibMap({ places }) {
               style="display:block;text-align:center;background:#3182f6;color:#fff;
                      padding:10px 0;border-radius:12px;font-size:13px;font-weight:600;text-decoration:none">
              카카오맵에서 보기 ↗
+           </a>
+           <a href="${naverHref}" target="_blank" rel="noreferrer"
+              style="display:block;text-align:center;background:#e7f8ee;color:#059142;
+                     padding:9px 0;border-radius:12px;font-size:12.5px;font-weight:600;text-decoration:none;margin-top:6px">
+             네이버지도에서 보기 ↗
            </a>
          </div>`,
         { closeButton: true }

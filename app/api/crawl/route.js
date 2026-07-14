@@ -337,6 +337,53 @@ function topMenus(data) {
   }
 }
 
+// 후기조작 의심 신호 (어드민 판단용 — 자동 제외하지 않음)
+function suspicion(data, rating, reviews, tastePct, moodPct) {
+  const reasons = [];
+  try {
+    // ① 사진 리뷰어들의 프로필 평균 별점이 5.0에 몰림
+    const owners = [];
+    const seen = new Set();
+    for (const ph of data?.photos?.photos || []) {
+      const o = ph?.kakaomap_review_photo_meta?.owner;
+      if (!o) continue;
+      const key = `${o.review_count}-${o.average_score}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      owners.push(o);
+    }
+    if (owners.length >= 5) {
+      const five = owners.filter((o) => Number(o.average_score) >= 4.9).length;
+      if (five / owners.length >= 0.6) reasons.push(`리뷰어 ${owners.length}명 중 ${five}명이 평균별점 4.9+`);
+      const newbies = owners.filter((o) => Number(o.review_count) <= 3 && Number(o.average_score) >= 4.9).length;
+      if (newbies >= 3) reasons.push(`신규계정(리뷰 3개↓) 만점 리뷰어 ${newbies}명`);
+    }
+    // ② 리뷰 등록일이 특정 시기에 집중
+    const dates = (data?.kakaomap_review?.reviews || [])
+      .map((rv) => {
+        const m = String(rv?.registered_at || "").match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+        return m ? new Date(`${m[1]}-${m[2]}-${m[3]}`).getTime() : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a - b);
+    if (dates.length >= 5) {
+      const span = 14 * 86400 * 1000;
+      let best = 0;
+      for (let a = 0; a < dates.length; a++) {
+        const inWin = dates.filter((d) => d >= dates[a] && d <= dates[a] + span).length;
+        best = Math.max(best, inWin);
+      }
+      if (best / dates.length >= 0.7) reasons.push(`최근 리뷰 ${dates.length}개 중 ${best}개가 2주 안에 집중 등록`);
+    }
+    // ③ 태그 비율 과다 (평균 20~40% 대비)
+    if (tastePct != null && tastePct >= 70) reasons.push(`맛 태그 비율 ${tastePct}% (평균 20~40% 대비 과다)`);
+    if (moodPct != null && moodPct >= 70) reasons.push(`분위기 태그 비율 ${moodPct}% (과다)`);
+    // ④ 고평점 편중
+    if (rating >= 4.9 && reviews >= 50) reasons.push(`리뷰 ${reviews}개인데 평점 ${rating} (만점 편중)`);
+  } catch {}
+  return { score: reasons.length, reasons: reasons.join(" / ") };
+}
+
 async function kakaoPlace(id, sample) {
   const fails = [];
 
@@ -353,6 +400,15 @@ async function kakaoPlace(id, sample) {
           .filter(Boolean);
         const cat = data.summary?.category || {};
         const cnt = Number(ks.review_count || 0);
+        const _rating =
+          ks.average_score != null
+            ? Math.round(Number(ks.average_score) * 100) / 100
+            : cnt
+            ? Math.round((Number(ks.total_score || 0) / cnt) * 100) / 100
+            : 0;
+        const _taste = strengthPct(data.kakaomap_review, "맛");
+        const _mood = strengthPct(data.kakaomap_review, "분위기");
+        const sus = suspicion(data, _rating, cnt, _taste, _mood);
         return {
           rating:
             ks.average_score != null
@@ -371,6 +427,8 @@ async function kakaoPlace(id, sample) {
           address_hint: data.summary?.address?.road || data.summary?.address?.disp || "",
           hours_hint: kakaoHours(data),
           kakao_url: `https://place.map.kakao.com/${id}`,
+          suspect_score: sus.score,
+          suspect_reasons: sus.reasons,
           source: "panel3",
         };
       }

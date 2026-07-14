@@ -5,7 +5,6 @@ import Link from "next/link";
 import { supabase, hasSupabase } from "../../lib/supabase";
 import { DEFAULT_FILTERS, SITE_NAME, TASTE_KEYWORDS, FOOD_HINTS, MOOD_HINTS } from "../../lib/constants";
 
-// 간단 잠금용 비밀번호 — Vercel 환경변수 NEXT_PUBLIC_ADMIN_PASS 로 변경하세요
 const PASS = process.env.NEXT_PUBLIC_ADMIN_PASS || "matjib";
 
 export default function Admin() {
@@ -23,7 +22,7 @@ export default function Admin() {
         supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
         supabase
           .from("restaurants")
-          .select("id,name,region,theme,taste_pct,mood_pct,revisit_pct,crawled_at")
+          .select("id,name,region,theme,taste_pct,mood_pct,revisit_pct,suspect_score,suspect_reasons,hidden,crawled_at")
           .order("crawled_at", { ascending: false }),
       ]);
       if (s.data)
@@ -43,6 +42,11 @@ export default function Admin() {
     if (!hasSupabase) return setMsg("Supabase 연결 후 사용 가능합니다.");
     const { error } = await supabase.from("settings").upsert({ id: 1, ...f });
     setMsg(error ? `저장 실패: ${error.message}` : "저장 완료 — 수집과 홈 화면에 동일하게 적용됩니다.");
+  }
+
+  async function toggleHidden(r) {
+    await supabase.from("restaurants").update({ hidden: !r.hidden }).eq("id", r.id);
+    setRows(rows.map((x) => (x.id === r.id ? { ...x, hidden: !r.hidden } : x)));
   }
 
   async function remove(id) {
@@ -124,10 +128,8 @@ export default function Admin() {
         {msg && <p style={{ fontSize: 12.5, color: "var(--stamp)", marginTop: 10 }}>{msg}</p>}
       </section>
 
-      {/* ── ② 수집 ── */}
       <CrawlSection pass={pw} f={f} onDone={() => setRefresh((x) => x + 1)} />
 
-      {/* ── ③ 네이버 수기 검증 ── */}
       <NaverVerifyPanel refresh={refresh} minRevisit={f.min_revisit_pct} onDone={() => setRefresh((x) => x + 1)} />
 
       {/* ── ④ 수집된 가게 ── */}
@@ -135,23 +137,40 @@ export default function Admin() {
         <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 6 }}>
           ④ 수집된 가게 ({rows.length})
         </h2>
+        <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 12 }}>
+          ⚠️ 조작의심 배지에 마우스를 올리면 근거가 보여요. 참고용 신호이니 직접 판단 후 [숨김]으로 고객 화면에서만 제외하세요.
+        </p>
         {!hasSupabase && <p style={{ fontSize: 13, color: "var(--sub)" }}>Supabase 연결 후 표시됩니다.</p>}
         {rows.map((r) => (
           <div
             key={r.id}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}
           >
-            <span>
+            <span style={{ opacity: r.hidden ? 0.45 : 1 }}>
               {Number(r.taste_pct ?? 0) >= Number(r.mood_pct ?? 0) ? "🍜" : "✨"} {r.name}{" "}
               <span style={{ color: "var(--sub)", fontSize: 12 }}>
                 · {r.region}
                 {r.theme ? ` · ${r.theme}` : ""}
                 {r.revisit_pct != null ? ` · 재방문 ${r.revisit_pct}%` : " · 네이버 미검증"}
               </span>
+              {r.suspect_score > 0 && (
+                <span
+                  title={r.suspect_reasons || ""}
+                  style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fdf0e0", padding: "2px 8px", borderRadius: 999, cursor: "help" }}
+                >
+                  ⚠️ 조작의심 {r.suspect_score}
+                </span>
+              )}
+              {r.hidden && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--sub)" }}>(숨김)</span>}
             </span>
-            <button onClick={() => remove(r.id)} style={{ background: "none", border: 0, color: "var(--stamp)", fontSize: 12.5 }}>
-              삭제
-            </button>
+            <span style={{ display: "inline-flex", gap: 10, flexShrink: 0 }}>
+              <button onClick={() => toggleHidden(r)} style={{ background: "none", border: 0, color: "var(--sub)", fontSize: 12.5 }}>
+                {r.hidden ? "표시" : "숨김"}
+              </button>
+              <button onClick={() => remove(r.id)} style={{ background: "none", border: 0, color: "var(--stamp)", fontSize: 12.5 }}>
+                삭제
+              </button>
+            </span>
           </div>
         ))}
       </section>
@@ -159,28 +178,21 @@ export default function Admin() {
   );
 }
 
-// 리뷰 텍스트에서 사전 키워드 상위 2개 추출
 function topHits(texts, dict) {
   const cnt = {};
   for (const t of texts) for (const k of dict) if (t.includes(k)) cnt[k] = (cnt[k] || 0) + 1;
   return Object.entries(cnt).sort((x, y) => y[1] - x[1]).slice(0, 2).map((e) => e[0]);
 }
 
-// 음식/분위기 유형에 따라 한 줄 설명 생성 (항상 최소 한 줄 보장)
-function makeHighlight(d, texts, taste) {
-  const tastePct = d.taste_official ?? taste ?? 0;
-  const moodPct = d.mood_official ?? 0;
-  const isFood = tastePct >= moodPct;
-  const pct = isFood ? tastePct : moodPct;
-  const tag = isFood ? "맛" : "분위기";
-  const cnt = d.reviews ? Math.round((d.reviews * pct) / 100) : 0;
-
+// 한 줄 설명 — 통계 문구 없이, 두 유형이면 둘 다 반영 (항상 최소 한 줄)
+function makeHighlight(d, texts, foodOk, moodOk) {
   const parts = [];
-  const menu = isFood ? (d.menus || [])[0] : null;
+  const menu = foodOk ? (d.menus || [])[0] : null;
   if (menu) parts.push(`대표메뉴 ${menu}`);
-  parts.push(cnt ? `후기 ${d.reviews}명 중 ${cnt}명이 '${tag}'을 꼽았어요` : `'${tag}' 평가가 좋은 곳`);
-  const kws = topHits(texts, isFood ? FOOD_HINTS : MOOD_HINTS);
-  if (kws.length) parts.push(`${kws.join("·")} 언급`);
+  if (foodOk && moodOk) parts.push("맛과 분위기 모두 호평");
+  const kws = [...(foodOk ? topHits(texts, FOOD_HINTS) : []), ...(moodOk ? topHits(texts, MOOD_HINTS) : [])].slice(0, 3);
+  if (kws.length) parts.push(`${kws.join("·")} 언급이 많아요`);
+  if (!parts.length) parts.push(foodOk ? "'맛' 평가가 좋은 곳" : "분위기 좋다는 후기가 많은 곳");
   return parts.join(" · ");
 }
 
@@ -189,7 +201,7 @@ function makeHighlight(d, texts, taste) {
 // ─────────────────────────────────────────────
 function CrawlSection({ pass, f, onDone }) {
   const [region, setRegion] = useState("");
-  const [collectType, setCollectType] = useState("both"); // both | food | mood
+  const [collectType, setCollectType] = useState("both");
   const [skipExisting, setSkipExisting] = useState(true);
   const [keywords, setKeywords] = useState(TASTE_KEYWORDS.join(", "));
   const [showKw, setShowKw] = useState(false);
@@ -236,7 +248,7 @@ function CrawlSection({ pass, f, onDone }) {
       log(`[카카오] '${region} 맛집' — 검색 결과 끝까지 수집합니다…`);
       const { candidates } = await api({ mode: "kakao_search", query: `${region} 맛집` });
       log(
-        `후보 ${candidates.length}곳 발견 · 기준: ★${f.min_kakao_rating} / 리뷰 ${f.min_kakao_reviews} / 맛 ${f.min_taste_pct}% / 분위기 ${f.min_mood_pct}% · 유형: ${
+        `후보 ${candidates.length}곳 · 기준: ★${f.min_kakao_rating}/리뷰 ${f.min_kakao_reviews}/맛 ${f.min_taste_pct}%/분위기 ${f.min_mood_pct}% · 유형: ${
           collectType === "both" ? "음식+분위기" : collectType === "food" ? "음식맛집만" : "분위기맛집만"
         }`
       );
@@ -267,9 +279,10 @@ function CrawlSection({ pass, f, onDone }) {
           const moodOk = mood >= f.min_mood_pct;
           const typeOk = collectType === "both" ? foodOk || moodOk : collectType === "food" ? foodOk : moodOk;
           const pass1 = d.rating >= f.min_kakao_rating && d.reviews >= f.min_kakao_reviews && typeOk;
-          const kind = taste >= mood ? "음식" : "분위기";
+          const kind = foodOk && moodOk ? "음식+분위기" : foodOk ? "음식" : "분위기";
+          const susNote = d.suspect_score > 0 ? ` ⚠️의심${d.suspect_score}` : "";
           log(
-            `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% · 분위기 ${mood}% ${
+            `(${i}/${candidates.length}) ${c.name} — ★${d.rating} · 리뷰 ${d.reviews} · 맛 ${taste}% · 분위기 ${mood}%${susNote} ${
               pass1 ? `→ ${kind}맛집 저장` : "→ 제외"
             }`
           );
@@ -288,7 +301,7 @@ function CrawlSection({ pass, f, onDone }) {
             kakao_reviews: d.reviews,
             taste_pct: taste,
             mood_pct: d.mood_official ?? null,
-            highlight: makeHighlight(d, texts, taste) || null,
+            highlight: makeHighlight(d, texts, foodOk, moodOk) || null,
             naver_rating: null,
             naver_reviews: null,
             revisit_pct: null,
@@ -298,6 +311,9 @@ function CrawlSection({ pass, f, onDone }) {
             lng: c.lng ?? null,
             kakao_url: d.kakao_url || "",
             naver_url: "",
+            suspect_score: d.suspect_score || 0,
+            suspect_reasons: d.suspect_reasons || null,
+            hidden: false,
           };
           const { error } = await supabase.from("restaurants").upsert(row, { onConflict: "region,name" });
           if (error) {
@@ -344,6 +360,7 @@ function CrawlSection({ pass, f, onDone }) {
       </h2>
       <p style={{ fontSize: 12, color: "var(--sub)", marginBottom: 14 }}>
         검색 결과를 끝까지 검수해요 (놓치는 가게 없음). 가게마다 즉시 저장되니 중간에 멈춰도 그때까지는 남아요.
+        맛·분위기 기준을 둘 다 넘는 가게는 두 유형 모두로 표시돼요.
       </p>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 12 }}>
@@ -444,12 +461,12 @@ function CrawlSection({ pass, f, onDone }) {
 
 // ─────────────────────────────────────────────
 // ③ 네이버 수기 검증 — 알바생용
-// 링크 열기 → 리뷰 최신순 → 최근 20개 중 "N번째 방문" 개수 세기 → 입력 → 저장
 // ─────────────────────────────────────────────
 function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
   const [pending, setPending] = useState([]);
   const [counts, setCounts] = useState({});
   const [savedMsg, setSavedMsg] = useState("");
+  const [regionFilter, setRegionFilter] = useState("전체");
 
   useEffect(() => {
     if (!hasSupabase) return;
@@ -459,7 +476,7 @@ function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
         .select("id,name,region,naver_url")
         .is("revisit_pct", null)
         .order("crawled_at", { ascending: false })
-        .limit(200);
+        .limit(300);
       setPending(data || []);
     })();
   }, [refresh]);
@@ -468,7 +485,7 @@ function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
     const raw = counts[r.id];
     if (raw === undefined || raw === "") return alert("재방문 개수를 입력하세요 (0~20)");
     const cnt = Math.max(0, Math.min(20, Number(raw)));
-    const pct = cnt * 5; // 20개 기준 → %
+    const pct = cnt * 5;
     const { error } = await supabase.from("restaurants").update({ revisit_pct: pct }).eq("id", r.id);
     if (error) return alert(`저장 실패: ${error.message}`);
     setPending(pending.filter((x) => x.id !== r.id));
@@ -481,6 +498,8 @@ function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
   const naverLink = (r) =>
     r.naver_url || `https://map.naver.com/p/search/${encodeURIComponent(`${(r.region || "").split(" ").pop()} ${r.name}`)}`;
 
+  const shown = pending.filter((r) => regionFilter === "전체" || r.region === regionFilter);
+
   return (
     <section className="card" style={{ marginBottom: 24 }}>
       <h2 className="serif" style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
@@ -488,12 +507,24 @@ function NaverVerifyPanel({ refresh, minRevisit, onDone }) {
       </h2>
       <ol style={{ fontSize: 12, color: "var(--sub)", lineHeight: 1.9, margin: "0 0 14px 18px" }}>
         <li>[네이버 리뷰 열기]를 눌러 가게를 찾고, 리뷰 탭 → <b>최신순</b>으로 바꿔요</li>
-        <li>최근 리뷰 <b>20개</b>를 보면서 &ldquo;<b>N번째 방문</b>&rdquo; 표시가 붙은 리뷰 개수를 세요</li>
-        <li>개수를 입력하고 저장 — 기준({minRevisit}% = 20개 중 {Math.ceil(minRevisit / 5)}개) 이상이면 홈에 &lsquo;네이버까지 검증&rsquo; 배지가 자동으로 붙어요</li>
+        <li>최근 리뷰 <b>20개</b>에서 &ldquo;<b>N번째 방문</b>&rdquo; 표시가 붙은 리뷰 개수를 세요</li>
+        <li>개수 입력 → 저장 — 기준({minRevisit}% = 20개 중 {Math.ceil(minRevisit / 5)}개) 이상이면 홈에 &lsquo;네이버까지 검증&rsquo; 배지가 자동으로 붙어요</li>
       </ol>
       {savedMsg && <p style={{ fontSize: 12.5, color: "var(--stamp)", marginBottom: 10 }}>{savedMsg}</p>}
+      {pending.length > 0 && (
+        <select
+          value={regionFilter}
+          onChange={(e) => setRegionFilter(e.target.value)}
+          style={{ padding: "7px 10px", border: "1px solid var(--line)", borderRadius: 10, fontSize: 12.5, marginBottom: 10 }}
+          aria-label="검증 대기 지역 필터"
+        >
+          {["전체", ...Array.from(new Set(pending.map((x) => x.region)))].map((rg) => (
+            <option key={rg}>{rg}</option>
+          ))}
+        </select>
+      )}
       {pending.length === 0 && <p style={{ fontSize: 13, color: "var(--sub)" }}>검증 대기 중인 가게가 없어요 🎉</p>}
-      {pending.map((r) => (
+      {shown.map((r) => (
         <div
           key={r.id}
           style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid var(--line)", fontSize: 13.5 }}

@@ -10,8 +10,12 @@ import {
   SAMPLE_RESTAURANTS,
 } from "../lib/constants";
 
-// 음식맛집 / 분위기맛집 분류: 카카오 '맛' 태그 vs '분위기' 태그 비율 비교
-const typeOf = (r) => (Number(r.taste_pct ?? 0) >= Number(r.mood_pct ?? 0) ? "food" : "mood");
+// 오래된 데이터의 한 줄 설명에서 통계 문구 제거 (고객창 노출용)
+const cleanHighlight = (h) =>
+  (h || "")
+    .replace(/후기 [\d,]+명 중 [\d,]+명이 '[^']+'[을를] 꼽았어요( · )?/g, "")
+    .replace(/^ · | · $/g, "")
+    .trim();
 
 export default function Home() {
   const [rows, setRows] = useState([]);
@@ -40,7 +44,8 @@ export default function Home() {
       return;
     }
     setDbError("");
-    setRows(r.data?.length ? r.data : SAMPLE_RESTAURANTS);
+    const clean = (r.data || []).filter((x) => !x.hidden);
+    setRows(clean.length ? clean : SAMPLE_RESTAURANTS);
     if (s.data) {
       setF({
         min_kakao_rating: Number(s.data.min_kakao_rating),
@@ -71,10 +76,13 @@ export default function Home() {
 
   // ── 2단계 검증 ──
   // 카카오 검증: 평점·리뷰수·맛 태그 비율 통과
+  // 유형 판정 — 기준을 둘 다 넘으면 두 유형 모두에 해당
+  const qualifiesFood = (r) => Number(r.taste_pct ?? 0) >= f.min_taste_pct;
+  const qualifiesMood = (r) => Number(r.mood_pct ?? 0) >= f.min_mood_pct;
   const kakaoPass = (r) =>
     Number(r.kakao_rating) >= f.min_kakao_rating &&
     Number(r.kakao_reviews) >= f.min_kakao_reviews &&
-    (Number(r.taste_pct ?? 0) >= f.min_taste_pct || Number(r.mood_pct ?? 0) >= f.min_mood_pct);
+    (qualifiesFood(r) || qualifiesMood(r));
   // 네이버 검증: 재방문 데이터가 있고 기준까지 통과
   const naverPass = (r) =>
     r.revisit_pct != null &&
@@ -87,7 +95,7 @@ export default function Home() {
   const inScope = (r) =>
     (region === "전체" || r.region === region) &&
     (theme === "전체" || r.theme === theme) &&
-    (type === "전체" || typeOf(r) === type);
+    (type === "전체" || (type === "food" ? qualifiesFood(r) : qualifiesMood(r)));
 
   const SORTS = {
     rating: (a, b) => Number(b.kakao_rating) - Number(a.kakao_rating),
@@ -296,7 +304,7 @@ export default function Home() {
 
             <div style={{ display: "grid", gap: 14 }}>
               {visible.map((r) => (
-                <RestaurantCard key={r.id} r={r} tier={tier(r)} />
+                <RestaurantCard key={r.id} r={r} tier={tier(r)} food={qualifiesFood(r)} mood={qualifiesMood(r)} />
               ))}
             </div>
           </section>
@@ -312,32 +320,40 @@ export default function Home() {
   );
 }
 
-function TypeChip({ r }) {
-  const food = typeOf(r) === "food";
-  return (
+function TypeChips({ food, mood }) {
+  const chip = (isFood) => (
     <span
+      key={isFood ? "f" : "m"}
       style={{
         fontSize: 10.5,
         fontWeight: 700,
         padding: "3px 9px",
         borderRadius: 999,
-        background: food ? "#fdf0e6" : "#efeafd",
-        color: food ? "#b4560f" : "#6d43c9",
+        background: isFood ? "#fdf0e6" : "#efeafd",
+        color: isFood ? "#b4560f" : "#6d43c9",
       }}
     >
-      {food ? "🍜 음식맛집" : "✨ 분위기맛집"}
+      {isFood ? "🍜 음식맛집" : "✨ 분위기맛집"}
     </span>
+  );
+  return (
+    <>
+      {food && chip(true)}
+      {mood && chip(false)}
+      {!food && !mood && chip(true)}
+    </>
   );
 }
 
-function RestaurantCard({ r, tier }) {
+function RestaurantCard({ r, tier, food, mood }) {
+  const hl = cleanHighlight(r.highlight);
   return (
     <article className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 16 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
             <span style={{ fontSize: 11.5, color: "var(--sub)" }}>{r.region}</span>
-            <TypeChip r={r} />
+            <TypeChips food={food} mood={mood} />
           </div>
           <h3 className="serif" style={{ fontSize: 19, fontWeight: 900, lineHeight: 1.3 }}>
             {r.name}
@@ -359,9 +375,7 @@ function RestaurantCard({ r, tier }) {
               </span>
             )}
           </h3>
-          {r.highlight && (
-            <p style={{ fontSize: 13, color: "var(--body)", marginTop: 6 }}>{r.highlight}</p>
-          )}
+          {hl && <p style={{ fontSize: 13, color: "var(--body)", marginTop: 6 }}>{hl}</p>}
         </div>
         <span
           className={`stamp small ${tier === "fail" ? "fail" : ""}`}
@@ -409,11 +423,18 @@ function RestaurantCard({ r, tier }) {
             지도에서 보기
           </button>
         )}
-        {r.naver_url && (
-          <a href={r.naver_url} target="_blank" rel="noreferrer" style={{ color: "var(--sub)", fontSize: 12, marginLeft: 4 }}>
-            네이버 플레이스 ↗
-          </a>
-        )}
+        <a
+          className="btn-ghost"
+          style={{ background: "#e7f8ee", color: "#059142" }}
+          href={
+            r.naver_url ||
+            `https://map.naver.com/p/search/${encodeURIComponent(`${(r.region || "").split(" ").pop()} ${r.name}`)}`
+          }
+          target="_blank"
+          rel="noreferrer"
+        >
+          네이버지도에서 보기
+        </a>
       </div>
     </article>
   );
