@@ -1,7 +1,10 @@
 "use client";
+import * as Sentry from "@sentry/nextjs";
+import { useEffect } from "react";
 import Link from "next/link";
 
 export default function Error({ error, reset }) {
+  useEffect(() => { Sentry.captureException(error); }, [error]);
   return (
     <div style={{ maxWidth: 440, margin: "120px auto", padding: 24, textAlign: "center" }}>
       <h1 style={{ fontSize: 19, fontWeight: 800, marginBottom: 10 }}>잠시 문제가 생겼어요</h1>
