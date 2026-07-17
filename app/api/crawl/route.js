@@ -303,7 +303,7 @@ function kakaoHours(data) {
 function strengthPct(kr, label) {
   try {
     const ks = kr?.score_set;
-    const total = Number(ks?.review_count || 0);
+    const total = Number(ks?.strength_uv || 0);
     if (!total) return null;
 
     // 태그 id ↔ 이름 매핑

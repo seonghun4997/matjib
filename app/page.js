@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 
-const Map = dynamic(() => import("./Map"), {
+const MapView = dynamic(() => import("./Map"), {
   ssr: false,
   loading: () => <div className="map skel" />,
 });
@@ -198,7 +198,7 @@ export default function Home() {
 
         {/* 지도 */}
         <div id="map-anchor" style={{ marginBottom: 8 }}>
-          <Map places={scoped} />
+          <MapView places={scoped} />
         </div>
         <div
           style={{

@@ -772,11 +772,16 @@ function Settings({ settings, setSettings, onDone }) {
   const [msg, setMsg] = useState("");
 
   async function save() {
-    const { error } = await supabase
-      .from("settings")
-      .upsert({ ...settings, id: 1, updated_at: new Date().toISOString() });
-    setMsg(error ? `저장 실패: ${error.message}` : "저장 완료 — 수집과 고객 화면에 동일하게 적용됩니다.");
-    onDone();
+    try {
+      if (!supabase) throw new Error("Supabase가 연결되지 않았습니다.");
+      const { error } = await supabase
+        .from("settings")
+        .upsert({ ...settings, id: 1, updated_at: new Date().toISOString() });
+      setMsg(error ? `저장 실패: ${error.message}` : "저장 완료 — 수집과 고객 화면에 동일하게 적용됩니다.");
+      onDone();
+    } catch (e) {
+      setMsg(`저장 실패: ${e?.message || "알 수 없는 오류"}`);
+    }
   }
 
   const Row = ({ k, label, hint, step = 1 }) => (

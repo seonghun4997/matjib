@@ -15,11 +15,9 @@ export default function Error({ error, reset }) {
         <button className="btn btn-primary" onClick={() => reset()}>다시 시도</button>
         <Link href="/" className="btn btn-ghost">홈으로</Link>
       </div>
-      {error?.message && (
-        <p style={{ fontSize: 11, color: "var(--sub)", marginTop: 20, wordBreak: "break-all" }}>
-          {String(error.message).slice(0, 160)}
-        </p>
-      )}
+      <p style={{ fontSize: 11, color: "var(--sub)", marginTop: 20 }}>
+        일시적 오류가 발생했습니다.
+      </p>
     </div>
   );
 }
