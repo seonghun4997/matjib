@@ -124,7 +124,7 @@ async function startJob(region, isAdmin) {
       return Response.json({ blocked: "지금 다른 동네를 수집하고 있어요. 1~2분 뒤에 다시 눌러주세요." });
     if (list.some((j) => j.region === region && j.status === "done")) {
       const { count } = await sb
-        .from("restaurants")
+        .from("places")
         .select("id", { count: "exact", head: true })
         .eq("region", region);
       if ((count || 0) > 0)
