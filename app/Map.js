@@ -8,7 +8,7 @@ const JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const esc = (s) =>
   String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export default function Map({ places = [] }) {
+export default function MapView({ places = [] }) {
   const box = useRef(null);
   const map = useRef(null);
   const layer = useRef(null);
