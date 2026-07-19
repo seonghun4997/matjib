@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, hasSupabase } from "../../lib/supabase";
 import { DEFAULTS, SITE } from "../../lib/config";
+import CompanySwitcher from "../company-switcher"; // 디깅코퍼레이션 사업체 스위처
 
 const PASS = process.env.NEXT_PUBLIC_ADMIN_PASS || "matjib";
 
@@ -76,9 +77,12 @@ export default function Admin() {
     <div className="wrap-sm" style={{ padding: "32px 20px 80px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <h1 style={{ fontSize: 21, fontWeight: 800 }}>{SITE.name} 관리자</h1>
-        <Link href="/" style={{ fontSize: 12.5, color: "var(--sub)" }}>
-          고객 화면 보기 ↗
-        </Link>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Link href="/" style={{ fontSize: 12.5, color: "var(--sub)" }}>
+            고객 화면 보기 ↗
+          </Link>
+          <CompanySwitcher />
+        </div>
       </div>
 
       <div
